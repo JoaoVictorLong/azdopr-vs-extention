@@ -1,0 +1,156 @@
+{
+  "name": "azdopr",
+  "displayName": "Azure DevOps PR Viewer",
+  "description": "View all Pull Requests across your entire Azure DevOps organization in one place",
+  "version": "1.1.0",
+  "publisher": "JohnCWaters",
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:azureDevOpsPRs"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "azureDevOpsPRs.refresh",
+        "title": "Refresh Pull Requests",
+        "category": "Azure DevOps PR",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "azureDevOpsPRs.signIn",
+        "title": "Sign in to Azure DevOps",
+        "category": "Azure DevOps PR",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "azureDevOpsPRs.signOut",
+        "title": "Sign out from Azure DevOps",
+        "category": "Azure DevOps PR",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "azureDevOpsPRs.openPR",
+        "title": "Open Pull Request in Browser",
+        "category": "Azure DevOps PR"
+      },
+      {
+        "command": "azureDevOpsPRs.viewPR",
+        "title": "View Pull Request",
+        "category": "Azure DevOps PR"
+      },
+      {
+        "command": "azureDevOpsPRs.addLineComment",
+        "title": "Add Comment to Line",
+        "category": "Azure DevOps PR",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "azureDevOpsPRs.addLineCommentFromCodeLens",
+        "title": "Add Comment to Line (from CodeLens)",
+        "category": "Azure DevOps PR"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "azure-devops-pr-explorer",
+          "title": "Azure DevOps PRs",
+          "icon": "resources/azure-devops-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "azure-devops-pr-explorer": [
+        {
+          "id": "azureDevOpsPRs",
+          "name": "Pull Requests"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "azureDevOpsPRs.refresh",
+          "when": "view == azureDevOpsPRs",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [],
+      "editor/context": [
+        {
+          "command": "azureDevOpsPRs.addLineComment",
+          "group": "azureDevOpsPR@1",
+          "when": "editorTextFocus"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "azureDevOpsPRs",
+        "contents": "Welcome to Azure DevOps PR Viewer!\n\nTo get started, sign in to your Azure DevOps account.\n\n[Sign In to Azure DevOps](command:azureDevOpsPRs.signIn)\n\nOnce signed in, you'll see all pull requests from your organization.",
+        "when": "!azureDevOpsPRs:authenticated"
+      }
+    ],
+    "configuration": {
+      "title": "Azure DevOps PR Viewer",
+      "properties": {
+        "azureDevOpsPRViewer.organization": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps organization name (e.g., 'myorg' from dev.azure.com/myorg)"
+        },
+        "azureDevOpsPRViewer.autoRefreshInterval": {
+          "type": "number",
+          "default": 300,
+          "description": "Auto-refresh interval in seconds (0 to disable)"
+        },
+        "azureDevOpsPRViewer.maxPRsToFetch": {
+          "type": "number",
+          "default": 500,
+          "description": "Maximum number of PRs to fetch per project"
+        },
+        "azureDevOpsPRViewer.enableInlineComments": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline comment CodeLens in PR diff views"
+        },
+        "azureDevOpsPRViewer.codeLensInterval": {
+          "type": "number",
+          "default": 1,
+          "description": "Show 'Add Comment' CodeLens every N lines (1 = every line, 5 = every 5 lines, etc.)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "vite build",
+    "watch": "vite build --watch",
+    "package": "vite build --mode production",
+    "vscode:prepublish": "npm run compile",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.5",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.105.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "patch-package": "^8.0.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2",
+    "vite-plugin-static-copy": "^3.1.4"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^3.8.1",
+    "axios": "^1.13.2"
+  }
+}
