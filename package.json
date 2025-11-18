@@ -3,7 +3,8 @@
   "displayName": "Azure DevOps PR Viewer",
   "description": "View all Pull Requests across your entire Azure DevOps organization in one place",
   "version": "1.1.3",
-  "publisher": "JohnCWaters",
+  "publisher": "johncwaters",
+  "repository": "https://github.com/johncwaters/azdopr",
   "engines": {
     "vscode": "^1.105.0"
   },
