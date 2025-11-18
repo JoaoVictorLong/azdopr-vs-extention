@@ -5,6 +5,7 @@
   "version": "1.1.3",
   "publisher": "johncwaters",
   "repository": "https://github.com/johncwaters/azdopr",
+  "icon": "resources/azdopr-icon.png",
   "engines": {
     "vscode": "^1.105.0"
   },
@@ -22,13 +23,13 @@
       },
       {
         "command": "azureDevOpsPRs.signIn",
-        "title": "Sign in to Azure DevOps PR Viewer",
+        "title": "Sign In",
         "category": "Azure DevOps PR Viewer",
         "icon": "$(sign-in)"
       },
       {
         "command": "azureDevOpsPRs.signOut",
-        "title": "Sign out from Azure DevOps PR Viewer",
+        "title": "Sign Out",
         "category": "Azure DevOps PR Viewer",
         "icon": "$(sign-out)"
       },
