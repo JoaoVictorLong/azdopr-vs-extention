@@ -516,6 +516,47 @@ export class AzureDevOpsClient {
 	}
 
 	/**
+	 * Add a reply comment to an existing PR thread
+	 * @param projectId The project ID
+	 * @param repositoryId The repository ID
+	 * @param pullRequestId The pull request ID
+	 * @param threadId The thread ID to reply to
+	 * @param commentText The comment text
+	 * @returns The created comment
+	 */
+	async replyToPRThread(
+		projectId: string,
+		repositoryId: string,
+		pullRequestId: number,
+		threadId: number,
+		commentText: string,
+	): Promise<PRComment> {
+		const headers = await this.getAuthHeaders();
+		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/threads/${threadId}/comments?api-version=7.0`;
+
+		const requestBody = {
+			content: commentText,
+			commentType: 1, // 1 = text comment
+		};
+
+		const response = await this.axiosInstance.post(url, requestBody, {
+			headers,
+		});
+
+		// Map the response to our PRComment interface
+		const comment = response.data;
+		return {
+			id: comment.id,
+			parentCommentId: comment.parentCommentId,
+			author: comment.author,
+			content: comment.content,
+			publishedDate: new Date(comment.publishedDate),
+			lastUpdatedDate: new Date(comment.lastUpdatedDate),
+			commentType: comment.commentType,
+		};
+	}
+
+	/**
 	 * Fetch file content from Azure DevOps repository at a specific version
 	 * @param projectId The project ID
 	 * @param repositoryId The repository ID

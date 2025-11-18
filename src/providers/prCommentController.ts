@@ -1,6 +1,17 @@
 import * as vscode from "vscode";
 import { PRContextManager } from "../services/prContextManager";
-import type { AzureDevOpsClient, PRThread } from "../services/azureDevOpsClient";
+import type {
+	AzureDevOpsClient,
+	PRThread,
+} from "../services/azureDevOpsClient";
+
+/**
+ * Metadata stored for each comment thread
+ */
+interface CommentThreadMetadata {
+	/** The Azure DevOps PR thread ID */
+	prThreadId?: number;
+}
 
 /**
  * Controller for displaying and managing PR comments inline in diff views
@@ -9,7 +20,11 @@ import type { AzureDevOpsClient, PRThread } from "../services/azureDevOpsClient"
 export class PRCommentController {
 	private readonly commentController: vscode.CommentController;
 	private readonly disposables: vscode.Disposable[] = [];
-	private readonly commentThreads: Map<string, vscode.CommentThread> = new Map();
+	private readonly commentThreads: Map<string, vscode.CommentThread> =
+		new Map();
+	/** Metadata storage for comment threads, keyed by thread key */
+	private readonly threadMetadata: Map<string, CommentThreadMetadata> =
+		new Map();
 
 	constructor(private readonly azureDevOpsClient: AzureDevOpsClient) {
 		console.log("[PRCommentController] Initializing PR Comment Controller");
@@ -20,22 +35,46 @@ export class PRCommentController {
 			"Azure DevOps PR Viewer Comments",
 		);
 
+		// Configure comment controller options
+		this.commentController.options = {
+			prompt: "Add a comment",
+			placeHolder: "Write your comment here...",
+		};
+
 		this.setupCommentingRangeProvider();
 
-		// Listen for active editor changes to load comments
+		// Register command for accepting comment input (submit button)
 		this.disposables.push(
+			vscode.commands.registerCommand(
+				"azdo-pr-comments.acceptInput",
+				async (reply: vscode.CommentReply) => {
+					await this.handleCommentSubmit(reply);
+				},
+			),
 			vscode.window.onDidChangeActiveTextEditor((editor) => {
-				console.log(`[PRCommentController] Active editor changed: ${editor ? editor.document.uri.toString() : 'none'}`);
+				console.log(
+					`[PRCommentController] Active editor changed: ${editor ? editor.document.uri.toString() : "none"}`,
+				);
 				if (editor) {
 					this.loadCommentsForDocument(editor.document);
 				}
 			}),
 		);
+	}
 
+	/**
+	 * Initialize the comment controller and load comments for the current editor.
+	 * This should be called after construction to avoid async operations in the constructor.
+	 */
+	public async initialize(): Promise<void> {
 		// Load comments for the current editor
 		if (vscode.window.activeTextEditor) {
-			console.log(`[PRCommentController] Loading comments for current editor: ${vscode.window.activeTextEditor.document.uri.toString()}`);
-			this.loadCommentsForDocument(vscode.window.activeTextEditor.document);
+			console.log(
+				`[PRCommentController] Loading comments for current editor: ${vscode.window.activeTextEditor.document.uri.toString()}`,
+			);
+			await this.loadCommentsForDocument(
+				vscode.window.activeTextEditor.document,
+			);
 		} else {
 			console.log("[PRCommentController] No active editor on initialization");
 		}
@@ -65,11 +104,15 @@ export class PRCommentController {
 	public async loadCommentsForDocument(
 		document: vscode.TextDocument,
 	): Promise<void> {
-		console.log(`[PRCommentController] loadCommentsForDocument called for: ${document.uri.toString()} (scheme: ${document.uri.scheme})`);
+		console.log(
+			`[PRCommentController] loadCommentsForDocument called for: ${document.uri.toString()} (scheme: ${document.uri.scheme})`,
+		);
 
 		// Only process PR diff documents
 		if (document.uri.scheme !== "azdo-pr") {
-			console.log(`[PRCommentController] Skipping document - wrong scheme: ${document.uri.scheme}`);
+			console.log(
+				`[PRCommentController] Skipping document - wrong scheme: ${document.uri.scheme}`,
+			);
 			return;
 		}
 
@@ -77,12 +120,15 @@ export class PRCommentController {
 		const fileContext = contextManager.getPRFileContext(document.uri);
 
 		if (!fileContext) {
-			console.log(`[PRCommentController] No file context found for: ${document.uri.toString()}`);
-			console.log(`[PRCommentController] Available contexts in manager:`, Array.from((contextManager as any).fileContextMap.keys()));
+			console.log(
+				`[PRCommentController] No file context found for: ${document.uri.toString()}`,
+			);
 			return;
 		}
 
-		console.log(`[PRCommentController] File context found - PR #${fileContext.pullRequest.pullRequestId}, file: ${fileContext.filePath}, side: ${fileContext.side}`);
+		console.log(
+			`[PRCommentController] File context found - PR #${fileContext.pullRequest.pullRequestId}, file: ${fileContext.filePath}, side: ${fileContext.side}`,
+		);
 
 		// Clean up existing comment threads for this document
 		this.clearCommentsForDocument(document.uri);
@@ -95,7 +141,9 @@ export class PRCommentController {
 				fileContext.pullRequest.pullRequestId,
 			);
 
-			console.log(`Fetched ${threads.length} total threads for PR #${fileContext.pullRequest.pullRequestId}`);
+			console.log(
+				`Fetched ${threads.length} total threads for PR #${fileContext.pullRequest.pullRequestId}`,
+			);
 
 			// Filter threads for this file
 			const fileThreads = threads.filter((thread) => {
@@ -108,7 +156,9 @@ export class PRCommentController {
 				return threadPath === currentPath;
 			});
 
-			console.log(`Found ${fileThreads.length} threads for file: ${fileContext.filePath} (side: ${fileContext.side})`);
+			console.log(
+				`Found ${fileThreads.length} threads for file: ${fileContext.filePath} (side: ${fileContext.side})`,
+			);
 
 			// Create comment threads for this document
 			let createdCount = 0;
@@ -117,7 +167,9 @@ export class PRCommentController {
 				createdCount++;
 			}
 
-			console.log(`Created ${createdCount} comment threads in the editor for ${fileContext.filePath}`);
+			console.log(
+				`Created ${createdCount} comment threads in the editor for ${fileContext.filePath}`,
+			);
 		} catch (error) {
 			console.error("Failed to load comments for document:", error);
 		}
@@ -139,6 +191,7 @@ export class PRCommentController {
 
 		for (const key of threadsToRemove) {
 			this.commentThreads.delete(key);
+			this.threadMetadata.delete(key);
 		}
 	}
 
@@ -170,7 +223,9 @@ export class PRCommentController {
 
 		// If no line number is available, skip this thread
 		if (!lineNumber || lineNumber < 1) {
-			console.log(`Skipping thread ${thread.id}: No valid line number for ${side} side (lineNumber=${lineNumber})`);
+			console.log(
+				`Skipping thread ${thread.id}: No valid line number for ${side} side (lineNumber=${lineNumber})`,
+			);
 			return;
 		}
 
@@ -179,7 +234,9 @@ export class PRCommentController {
 
 		// Ensure line number is within document bounds
 		if (zeroBasedLine >= document.lineCount) {
-			console.log(`Skipping thread ${thread.id}: Line ${lineNumber} is out of bounds (document has ${document.lineCount} lines)`);
+			console.log(
+				`Skipping thread ${thread.id}: Line ${lineNumber} is out of bounds (document has ${document.lineCount} lines)`,
+			);
 			return;
 		}
 
@@ -214,14 +271,115 @@ export class PRCommentController {
 		commentThread.collapsibleState =
 			vscode.CommentThreadCollapsibleState.Expanded;
 
-		// Store thread metadata for future operations
-		(commentThread as any).prThreadId = thread.id;
-
 		// Track this comment thread for cleanup
 		const threadKey = `${document.uri.toString()}#${thread.id}`;
 		this.commentThreads.set(threadKey, commentThread);
 
-		console.log(`Created comment thread ${thread.id} at line ${lineNumber} with ${comments.length} comment(s)`);
+		// Store thread metadata for future operations
+		this.threadMetadata.set(threadKey, { prThreadId: thread.id });
+
+		console.log(
+			`Created comment thread ${thread.id} at line ${lineNumber} with ${comments.length} comment(s)`,
+		);
+	}
+
+	/**
+	 * Get the metadata for a comment thread by searching through stored threads
+	 */
+	private getThreadMetadata(
+		thread: vscode.CommentThread,
+	): CommentThreadMetadata | undefined {
+		// Search for this thread in our stored threads
+		for (const [key, storedThread] of this.commentThreads) {
+			if (storedThread === thread) {
+				return this.threadMetadata.get(key);
+			}
+		}
+		return undefined;
+	}
+
+	/**
+	 * Handle comment submission (both new threads and replies)
+	 */
+	private async handleCommentSubmit(reply: vscode.CommentReply): Promise<void> {
+		try {
+			const commentText = reply.text.trim();
+			if (!commentText) {
+				vscode.window.showWarningMessage("Comment cannot be empty");
+				return;
+			}
+
+			// Get PR context from the document
+			const contextManager = PRContextManager.getInstance();
+			const fileContext = contextManager.getPRFileContext(reply.thread.uri);
+
+			if (!fileContext) {
+				vscode.window.showErrorMessage("No PR context found for this file");
+				return;
+			}
+
+			const pr = fileContext.pullRequest;
+			const metadata = this.getThreadMetadata(reply.thread);
+			const prThreadId = metadata?.prThreadId;
+
+			await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: prThreadId ? "Adding reply..." : "Creating comment...",
+					cancellable: false,
+				},
+				async (progress) => {
+					progress.report({ increment: 0 });
+
+					if (prThreadId) {
+						// Reply to existing thread
+						await this.azureDevOpsClient.replyToPRThread(
+							pr.repository.project.id,
+							pr.repository.id,
+							pr.pullRequestId,
+							prThreadId,
+							commentText,
+						);
+					} else {
+						// Create new thread
+						if (!reply.thread.range) {
+							throw new Error("Cannot create new thread without a range");
+						}
+						const lineNumber = reply.thread.range.start.line + 1;
+						await this.azureDevOpsClient.createPRThread(
+							pr.repository.project.id,
+							pr.repository.id,
+							pr.pullRequestId,
+							fileContext.filePath,
+							lineNumber,
+							commentText,
+							fileContext.side,
+						);
+					}
+
+					progress.report({ increment: 100 });
+				},
+			);
+
+			// Find the document for the thread URI
+			const document = vscode.workspace.textDocuments.find(
+				(doc) => doc.uri.toString() === reply.thread.uri.toString(),
+			);
+
+			// Refresh comments to show the new comment
+			if (document) {
+				await this.loadCommentsForDocument(document);
+			}
+
+			vscode.window.showInformationMessage(
+				prThreadId ? "Reply added successfully" : "Comment added successfully",
+			);
+		} catch (error) {
+			const errorMessage =
+				error instanceof Error ? error.message : "Unknown error";
+			vscode.window.showErrorMessage(`Failed to add comment: ${errorMessage}`);
+			console.error("Error adding comment:", error);
+		}
 	}
 
 	/**
@@ -253,6 +411,7 @@ export class PRCommentController {
 			thread.dispose();
 		}
 		this.commentThreads.clear();
+		this.threadMetadata.clear();
 
 		// Reload comments for all visible editors
 		for (const editor of vscode.window.visibleTextEditors) {
@@ -271,6 +430,7 @@ export class PRCommentController {
 			thread.dispose();
 		}
 		this.commentThreads.clear();
+		this.threadMetadata.clear();
 
 		// Dispose the comment controller
 		this.commentController.dispose();

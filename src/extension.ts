@@ -53,6 +53,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Initialize the comment controller for displaying PR comments inline
 	commentController = new PRCommentController(azureDevOpsClient);
+	// Initialize asynchronously (don't await to avoid blocking activation)
+	commentController.initialize();
 
 	// Collect all subscriptions
 	const subscriptions = [
