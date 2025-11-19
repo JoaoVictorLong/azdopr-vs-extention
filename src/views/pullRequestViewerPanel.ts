@@ -48,8 +48,10 @@ export class PullRequestViewerPanel {
 							message.path,
 							"changeType:",
 							message.changeType,
+							"originalPath:",
+							message.originalPath,
 						);
-						await this._openFileDiff(message.path, message.changeType);
+						await this._openFileDiff(message.path, message.changeType, message.originalPath);
 						break;
 					case "openExternal":
 						vscode.env.openExternal(vscode.Uri.parse(message.url));
@@ -340,13 +342,14 @@ export class PullRequestViewerPanel {
 	/**
 	 * Open a file in diff view showing changes between base and modified versions
 	 */
-	private async _openFileDiff(path: string, changeType: string) {
+	private async _openFileDiff(path: string, changeType: string, originalPath?: string) {
 		try {
-			console.log("Opening file diff:", path, "changeType:", changeType);
+			console.log("Opening file diff:", path, "changeType:", changeType, "originalPath:", originalPath);
 			vscode.window.setStatusBarMessage(`Loading diff for ${path}...`, 3000);
 
 			const isAdded = changeType.includes("add");
 			const isDeleted = changeType.includes("delete");
+			const isRenamed = changeType.includes("rename");
 
 			// Get branch names
 			const sourceBranch = this.pullRequest.sourceRefName
@@ -376,10 +379,12 @@ export class PullRequestViewerPanel {
 								increment: 25,
 								message: "Fetching base version...",
 							});
+							// Use originalPath for renamed files when fetching the base version
+							const basePathToFetch = isRenamed && originalPath ? originalPath : path;
 							baseContent = await this.azureDevOpsClient.getFileContent(
 								this.pullRequest.repository.project.id,
 								this.pullRequest.repository.id,
-								path,
+								basePathToFetch,
 								targetBranch,
 							);
 						}
@@ -439,9 +444,11 @@ export class PullRequestViewerPanel {
 						let title = `${fileName} (PR #${prId})`;
 						if (isAdded) {
 							title = `${fileName} (Added in PR #${prId})`;
-						}
-						if (isDeleted) {
+						} else if (isDeleted) {
 							title = `${fileName} (Deleted in PR #${prId})`;
+						} else if (isRenamed && originalPath) {
+							const originalFileName = originalPath.split("/").pop() || originalPath;
+							title = `${originalFileName} → ${fileName} (Renamed in PR #${prId})`;
 						}
 
 						// Associate both sides of the diff with the PR context for commenting
@@ -481,13 +488,6 @@ export class PullRequestViewerPanel {
 							modifiedUri,
 							title,
 						);
-
-						// Give editors time to fully initialize, then manually trigger comment loading
-						// This ensures comments load even if the automatic trigger missed them
-						setTimeout(async () => {
-							console.log("[PRViewerPanel] Manually refreshing comments after diff opened");
-							await vscode.commands.executeCommand("azureDevOpsPRs.refreshComments");
-						}, 500);
 
 						progress.report({ increment: 100 });
 						console.log("Diff view opened successfully for:", path);
@@ -812,6 +812,10 @@ export class PullRequestViewerPanel {
             }
             .change-delete {
                 background-color: var(--vscode-gitDecoration-deletedResourceForeground);
+                color: var(--vscode-editor-background);
+            }
+            .change-rename {
+                background-color: var(--vscode-gitDecoration-renamedResourceForeground);
                 color: var(--vscode-editor-background);
             }
             .empty-state {
@@ -1309,16 +1313,26 @@ export class PullRequestViewerPanel {
 				if (change.changeType?.includes("add")) {
 					changeTypeClass = "change-add";
 					changeTypeText = "A";
-				}
-				if (change.changeType?.includes("delete")) {
+				} else if (change.changeType?.includes("delete")) {
 					changeTypeClass = "change-delete";
 					changeTypeText = "D";
+				} else if (change.changeType?.includes("rename")) {
+					changeTypeClass = "change-rename";
+					changeTypeText = "R";
+				}
+
+				// Display path with rename indicator if applicable
+				let displayPath = this._escapeHtml(change.item?.path);
+				if (change.changeType?.includes("rename") && change.originalPath) {
+					const originalFileName = change.originalPath.split("/").pop() || change.originalPath;
+					const newFileName = change.item?.path.split("/").pop() || change.item?.path;
+					displayPath = `${this._escapeHtml(originalFileName)} → ${this._escapeHtml(newFileName)}`;
 				}
 
 				return `
-                <li class="file-item" data-file-path="${this._escapeHtml(change.item?.path)}" data-change-type="${this._escapeHtml(change.changeType)}" data-file-index="${index}">
+                <li class="file-item" data-file-path="${this._escapeHtml(change.item?.path)}" data-change-type="${this._escapeHtml(change.changeType)}" data-original-path="${this._escapeHtml(change.originalPath || '')}" data-file-index="${index}">
                     <span class="file-change-type ${changeTypeClass}">${changeTypeText}</span>
-                    <span>${this._escapeHtml(change.item?.path)}</span>
+                    <span>${displayPath}</span>
                 </li>`;
 			})
 			.join("");
@@ -1351,13 +1365,15 @@ export class PullRequestViewerPanel {
                     if (fileItem) {
                         const filePath = fileItem.getAttribute('data-file-path');
                         const changeType = fileItem.getAttribute('data-change-type');
-                        console.log('File clicked:', filePath, 'changeType:', changeType);
+                        const originalPath = fileItem.getAttribute('data-original-path');
+                        console.log('File clicked:', filePath, 'changeType:', changeType, 'originalPath:', originalPath);
 
                         try {
                             vscode.postMessage({
                                 command: 'openFile',
                                 path: filePath,
-                                changeType: changeType
+                                changeType: changeType,
+                                originalPath: originalPath
                             });
                             console.log('Message posted successfully');
                         } catch (error) {

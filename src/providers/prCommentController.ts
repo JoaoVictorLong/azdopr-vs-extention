@@ -25,6 +25,8 @@ export class PRCommentController {
 	/** Metadata storage for comment threads, keyed by thread key */
 	private readonly threadMetadata: Map<string, CommentThreadMetadata> =
 		new Map();
+	/** Track documents currently being loaded to prevent duplicate loads */
+	private readonly loadingDocuments: Set<string> = new Set();
 
 	constructor(private readonly azureDevOpsClient: AzureDevOpsClient) {
 		console.log("[PRCommentController] Initializing PR Comment Controller");
@@ -104,8 +106,9 @@ export class PRCommentController {
 	public async loadCommentsForDocument(
 		document: vscode.TextDocument,
 	): Promise<void> {
+		const uriString = document.uri.toString();
 		console.log(
-			`[PRCommentController] loadCommentsForDocument called for: ${document.uri.toString()} (scheme: ${document.uri.scheme})`,
+			`[PRCommentController] loadCommentsForDocument called for: ${uriString} (scheme: ${document.uri.scheme})`,
 		);
 
 		// Only process PR diff documents
@@ -115,6 +118,15 @@ export class PRCommentController {
 			);
 			return;
 		}
+
+		// Prevent duplicate loads for the same document
+		if (this.loadingDocuments.has(uriString)) {
+			console.log(
+				`[PRCommentController] Already loading comments for: ${uriString}`,
+			);
+			return;
+		}
+		this.loadingDocuments.add(uriString);
 
 		const contextManager = PRContextManager.getInstance();
 		const fileContext = contextManager.getPRFileContext(document.uri);
@@ -172,6 +184,9 @@ export class PRCommentController {
 			);
 		} catch (error) {
 			console.error("Failed to load comments for document:", error);
+		} finally {
+			// Always remove from loading set when done
+			this.loadingDocuments.delete(uriString);
 		}
 	}
 
@@ -266,7 +281,11 @@ export class PRCommentController {
 		);
 
 		// Set thread properties
-		commentThread.label = this.getThreadStatusLabel(thread.status);
+		// Only show label for non-active threads (resolved, closed, etc.)
+		const statusNum = typeof thread.status === 'string' ? parseInt(thread.status, 10) : thread.status;
+		if (statusNum !== undefined && statusNum !== null && statusNum !== 1 && statusNum !== 0) {
+			commentThread.label = this.getThreadStatusLabel(thread.status);
+		}
 		commentThread.canReply = true;
 		commentThread.collapsibleState =
 			vscode.CommentThreadCollapsibleState.Expanded;
