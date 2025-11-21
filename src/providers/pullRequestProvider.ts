@@ -17,6 +17,7 @@ export class PullRequestProvider
 
 	private pullRequests: PullRequest[] = [];
 	private hasInitialized = false;
+	private isRefreshing = false;
 
 	constructor(
 		private readonly azureDevOpsClient: AzureDevOpsClient,
@@ -71,6 +72,28 @@ export class PullRequestProvider
 
 			// Root level - fetch and display PRs
 			try {
+				// Show cached PRs immediately if available
+				if (this.pullRequests.length > 0 && !this.isRefreshing) {
+					// Refresh in background
+					this.fetchPullRequests()
+						.then(() => {
+							this.isRefreshing = false;
+							this.refresh();
+						})
+						.catch(() => {
+							this.isRefreshing = false;
+						});
+					this.isRefreshing = true;
+
+					const result = this.getGroupedByProjectView();
+					console.log(
+						`Returning ${result.length} cached projects at root level`,
+						result.map((p) => p.label),
+					);
+					return result;
+				}
+
+				// First load - wait for data
 				await this.fetchPullRequests();
 
 				if (this.pullRequests.length === 0) {

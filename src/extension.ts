@@ -56,6 +56,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		),
 		commentController,
 		vscode.commands.registerCommand("azureDevOpsPRs.refresh", () => {
+			azureDevOpsClient.clearCache();
 			pullRequestProvider.refresh();
 		}),
 		vscode.commands.registerCommand("azureDevOpsPRs.signIn", async () => {

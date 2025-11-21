@@ -13,9 +13,17 @@ export class PullRequestViewerPanel {
 	private static _currentPanel: PullRequestViewerPanel | undefined;
 	private static _contentProviderRegistered: boolean = false;
 	private static readonly _virtualFileCache: Map<string, string> = new Map();
+	private static _markedPromise: Promise<any> | undefined;
 
 	public static get currentPanel(): PullRequestViewerPanel | undefined {
 		return PullRequestViewerPanel._currentPanel;
+	}
+
+	private static async getMarked(): Promise<any> {
+		if (!PullRequestViewerPanel._markedPromise) {
+			PullRequestViewerPanel._markedPromise = import("marked");
+		}
+		return PullRequestViewerPanel._markedPromise;
 	}
 
 	private readonly _panel: vscode.WebviewPanel;
@@ -159,16 +167,16 @@ export class PullRequestViewerPanel {
 			}
 
 			// Convert markdown description to HTML
-			const { marked } = await import("marked");
+			const { marked } = await PullRequestViewerPanel.getMarked();
 			const descriptionHtml = this.pullRequest.description
 				? await marked(this.pullRequest.description)
 				: "No description provided.";
 
 			webview.html = this._getHtmlForWebview(webview, fileChanges, descriptionHtml);
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : "Unknown error";
-			webview.html = this._getErrorHtml(errorMessage);
+			const friendlyMessage = this._getFriendlyErrorMessage(error);
+			console.error("Error loading pull request:", error);
+			webview.html = this._getErrorHtml(friendlyMessage);
 		}
 	}
 
@@ -256,27 +264,32 @@ export class PullRequestViewerPanel {
 			? pr.targetRefName.replace("refs/heads/", "")
 			: "unknown";
 
-		return `<!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-            <title>PR #${pr.pullRequestId}</title>
-            ${this._getStyles()}
-        </head>
-        <body>
-            <div class="container">
-                ${this._getHeaderHtml(pr, sourceBranch, targetBranch, createdDate, createdTime)}
-                <div class="review-section-wrapper">
-                    ${this._getCombinedReviewsHtml(pr)}
-                    ${this._getDescriptionHtml(descriptionHtml)}
-                </div>
-                ${this._getFileChangesHtml(fileChanges)}
-            </div>
-            ${this._getScripts(nonce)}
-        </body>
-        </html>`;
+		// Build HTML using array join to avoid template literal issues with description content
+		const parts = [
+			"<!DOCTYPE html>",
+			"<html lang=\"en\">",
+			"<head>",
+			"<meta charset=\"UTF-8\">",
+			"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">",
+			`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">`,
+			`<title>PR #${pr.pullRequestId}</title>`,
+			this._getStyles(),
+			"</head>",
+			"<body>",
+			"<div class=\"container\">",
+			this._getHeaderHtml(pr, sourceBranch, targetBranch, createdDate, createdTime),
+			"<div class=\"review-section-wrapper\">",
+			this._getCombinedReviewsHtml(pr),
+			this._getDescriptionHtml(descriptionHtml),
+			"</div>",
+			this._getFileChangesHtml(fileChanges),
+			"</div>",
+			this._getScripts(nonce),
+			"</body>",
+			"</html>",
+		];
+
+		return parts.join("");
 	}
 
 	/**
@@ -330,12 +343,11 @@ export class PullRequestViewerPanel {
 			// Refresh the panel to show updated reviewer status
 			await this._update();
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : "Unknown error";
-			vscode.window.showErrorMessage(
-				`Failed to submit review: ${errorMessage}`,
-			);
+			const friendlyMessage = this._getFriendlyErrorMessage(error);
 			console.error("Error submitting review:", error);
+			vscode.window.showErrorMessage(
+				`Failed to submit review: ${friendlyMessage}`,
+			);
 		}
 	}
 
@@ -492,13 +504,12 @@ export class PullRequestViewerPanel {
 						progress.report({ increment: 100 });
 						console.log("Diff view opened successfully for:", path);
 					} catch (error) {
-						const errorMessage =
-							error instanceof Error ? error.message : "Unknown error";
+						const friendlyMessage = this._getFriendlyErrorMessage(error);
 						console.error("Error fetching file content:", error);
 
 						// Offer to view in browser as fallback
 						const action = await vscode.window.showErrorMessage(
-							`Failed to fetch file content: ${errorMessage}`,
+							`Failed to fetch file content: ${friendlyMessage}`,
 							"View in Browser",
 						);
 
@@ -516,10 +527,9 @@ export class PullRequestViewerPanel {
 				},
 			);
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : "Unknown error";
+			const friendlyMessage = this._getFriendlyErrorMessage(error);
 			console.error("Error opening file diff:", error);
-			vscode.window.showErrorMessage(`Failed to open diff: ${errorMessage}`);
+			vscode.window.showErrorMessage(`Failed to open diff: ${friendlyMessage}`);
 		}
 	}
 
@@ -1288,11 +1298,16 @@ export class PullRequestViewerPanel {
 	}
 
 	private _getDescriptionHtml(descriptionHtml: string): string {
-		return `
-        <div class="reviewers-section">
-            <h3 class="section-title" style="margin-bottom: 8px; font-size: 14px;">Description</h3>
-            <div class="description">${descriptionHtml}</div>
-        </div>`;
+		// Use string concatenation instead of template literals to avoid
+		// issues with special characters in the description
+		return (
+			'<div class="reviewers-section">' +
+			'<h3 class="section-title" style="margin-bottom: 8px; font-size: 14px;">Description</h3>' +
+			'<div class="description">' +
+			descriptionHtml +
+			"</div>" +
+			"</div>"
+		);
 	}
 
 	private _getFileChangesHtml(fileChanges: PRFileChange[]): string {
@@ -1431,6 +1446,61 @@ export class PullRequestViewerPanel {
 			"'": "&#039;",
 		};
 		return text.replaceAll(/[&<>"']/g, (m) => map[m]);
+	}
+
+	/**
+	 * Convert technical error messages to user-friendly messages
+	 */
+	private _getFriendlyErrorMessage(error: unknown): string {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		const lowerError = errorMessage.toLowerCase();
+
+		// Network and connection errors
+		if (lowerError.includes("fetch") && lowerError.includes("failed")) {
+			return "Unable to connect to Azure DevOps. Please check your network connection.";
+		}
+		if (lowerError.includes("timeout") || lowerError.includes("timed out")) {
+			return "The request took too long to complete. Please try again.";
+		}
+		if (lowerError.includes("network") || lowerError.includes("econnrefused")) {
+			return "Network error. Please check your connection and try again.";
+		}
+
+		// Authentication errors
+		if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
+			return "Authentication failed. Please sign in to Azure DevOps and try again.";
+		}
+		if (lowerError.includes("403") || lowerError.includes("forbidden")) {
+			return "You don't have permission to access this pull request.";
+		}
+
+		// Not found errors
+		if (lowerError.includes("404") || lowerError.includes("not found")) {
+			return "Pull request not found. It may have been deleted or you may not have access.";
+		}
+
+		// Missing data errors
+		if (lowerError.includes("missing required") || lowerError.includes("repository") && lowerError.includes("project")) {
+			return "Unable to load pull request details. Some required information is missing.";
+		}
+
+		// Configuration errors
+		if (lowerError.includes("organization") || lowerError.includes("configuration")) {
+			return "Azure DevOps is not configured correctly. Please check your settings.";
+		}
+
+		// Rate limiting
+		if (lowerError.includes("429") || lowerError.includes("rate limit")) {
+			return "Too many requests. Please wait a moment and try again.";
+		}
+
+		// Server errors
+		if (lowerError.includes("500") || lowerError.includes("502") || lowerError.includes("503")) {
+			return "Azure DevOps is experiencing issues. Please try again later.";
+		}
+
+		// Generic fallback
+		return "Unable to complete the request. Please try again.";
 	}
 }
 

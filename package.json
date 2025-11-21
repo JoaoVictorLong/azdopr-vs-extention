@@ -115,6 +115,14 @@
           "default": 500,
           "description": "Maximum number of PRs to fetch per project"
         },
+        "azureDevOpsPRViewer.includedProjects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "If specified, only fetch PRs from these projects (empty = all projects)"
+        },
         "azureDevOpsPRViewer.commentsAutoRefreshInterval": {
           "type": "number",
           "default": 30,

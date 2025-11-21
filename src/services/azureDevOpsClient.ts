@@ -120,9 +120,16 @@ export interface PRBuildStatus {
 	url: string;
 }
 
+interface CacheEntry<T> {
+	data: T;
+	timestamp: number;
+	ttl: number;
+}
+
 export class AzureDevOpsClient {
 	private readonly axiosInstance: AxiosInstance;
 	private organization: string = "";
+	private readonly cache = new Map<string, CacheEntry<any>>();
 
 	constructor(private readonly authProvider: AzureDevOpsAuthProvider) {
 		this.axiosInstance = axios.create({
@@ -154,6 +161,27 @@ export class AzureDevOpsClient {
 			throw new Error("Organization not configured");
 		}
 		return `https://dev.azure.com/${this.organization}`;
+	}
+
+	private async cachedFetch<T>(
+		key: string,
+		fetcher: () => Promise<T>,
+		ttlMs: number = 60000, // 1 minute default
+	): Promise<T> {
+		const cached = this.cache.get(key);
+		const now = Date.now();
+
+		if (cached && now - cached.timestamp < cached.ttl) {
+			return cached.data;
+		}
+
+		const data = await fetcher();
+		this.cache.set(key, { data, timestamp: now, ttl: ttlMs });
+		return data;
+	}
+
+	public clearCache(): void {
+		this.cache.clear();
 	}
 
 	async getProjects(): Promise<Project[]> {
@@ -210,23 +238,43 @@ export class AzureDevOpsClient {
 	}
 
 	async getAllPullRequests(): Promise<PullRequest[]> {
-		this.updateOrganization();
-		const projects = await this.getProjects();
-		const allPRs: PullRequest[] = [];
+		return this.cachedFetch(
+			"all-prs",
+			async () => {
+				this.updateOrganization();
+				let projects = await this.getProjects();
 
-		for (const project of projects) {
-			const repos = await this.getRepositories(project.id);
-			const prPromises = repos.map((repo) =>
-				this.getPullRequests(project.id, repo.id),
-			);
-			const prResults = await Promise.all(prPromises);
+				// Filter projects if configuration specifies included projects
+				const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
+				const includedProjects = config.get<string[]>("includedProjects", []);
 
-			for (const prs of prResults) {
-				allPRs.push(...prs);
-			}
-		}
+				if (includedProjects.length > 0) {
+					projects = projects.filter((p) =>
+						includedProjects.includes(p.name),
+					);
+					console.log(
+						`Filtered to ${projects.length} projects: ${projects.map((p) => p.name).join(", ")}`,
+					);
+				}
 
-		return allPRs;
+				// Fetch all repos for all projects in parallel
+				const projectRepoPromises = projects.map(async (project) => {
+					const repos = await this.getRepositories(project.id);
+					return { project, repos };
+				});
+
+				const projectRepos = await Promise.all(projectRepoPromises);
+
+				// Fetch all PRs for all repos in parallel
+				const allPRPromises = projectRepos.flatMap(({ project, repos }) =>
+					repos.map((repo) => this.getPullRequests(project.id, repo.id)),
+				);
+
+				const prResults = await Promise.all(allPRPromises);
+				return prResults.flat();
+			},
+			30000, // 30 second cache
+		);
 	}
 
 	async getPullRequestDetails(
