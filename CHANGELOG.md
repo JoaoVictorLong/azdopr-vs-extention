@@ -2,6 +2,42 @@
 
 All notable changes to the Azure DevOps PR Viewer extension.
 
+## [1.2.0] - 2025-01-21
+
+### Added
+
+- **Project filtering** - Filter PRs to specific projects using the `includedProjects` setting
+- **Response caching** - Added intelligent caching system for Azure DevOps API calls with 30-second cache for PR lists and 1-minute cache for other data
+- **Cached instant display** - PRs now display immediately from cache while refreshing in background for better perceived performance
+- **Comments auto-refresh** - Configurable auto-refresh interval for PR comments (default: 30 seconds)
+- **Friendly error messages** - Improved error handling with user-friendly error messages
+
+### Changed
+
+- **Refactored comment system** - Replaced CodeLens-based commenting with VS Code's native Comments API for better integration and performance
+  - Comments now appear inline as proper VS Code comment threads
+  - Improved comment display with proper status labels (resolved, closed, etc.)
+  - Prevented duplicate comment loads with loading state tracking
+- **Parallel data fetching** - Optimized API calls to fetch projects, repositories, and PRs in parallel for significantly faster load times
+- **Simplified command titles** - Shortened "Sign in to Azure DevOps PR Viewer" to "Sign In" and "Sign out from Azure DevOps PR Viewer" to "Sign Out"
+- **Comment command naming** - Renamed internal comment commands for better clarity
+
+### Removed
+
+- **Removed CodeLens provider** - No longer using CodeLens for adding comments (replaced with native Comments API)
+- **Removed decoration provider** - Removed unused gutter decoration provider
+- **Removed settings**:
+  - `enableInlineComments` - Comments are now always available via native API
+  - `codeLensInterval` - No longer needed without CodeLens
+
+### Fixed
+
+- **Icon path** - Added missing icon reference in package.json for marketplace display
+- **Publisher name** - Corrected publisher name casing in package.json
+- **Repository URL** - Added repository URL to package.json for better marketplace integration
+- **Comment loading** - Fixed duplicate comment loading issues
+- **Thread labels** - Only show status labels for non-active comment threads
+
 ## [1.0.0] - 2025-01-11
 
 ### Added

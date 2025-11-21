@@ -5,11 +5,13 @@ View all Pull Requests across your Azure DevOps organization in VS Code.
 ## Features
 
 - View all PRs across all projects and repositories in your organization
+- Filter PRs to specific projects for focused workflow
 - Microsoft Entra ID authentication
 - PRs grouped by Project → Repository → Pull Request
 - View and diff PR files without local checkout
-- Add inline comments directly to PR diffs
-- Auto-refresh and manual refresh options
+- Add inline comments directly to PR diffs using VS Code's native commenting API
+- Auto-refresh with intelligent caching for improved performance
+- Manual refresh options
 
 ## Quick Start
 
@@ -35,8 +37,8 @@ Your PRs will load automatically.
 - `azureDevOpsPRViewer.organization`: Your Azure DevOps organization name
 - `azureDevOpsPRViewer.autoRefreshInterval`: Auto-refresh interval in seconds (default: 300, set to 0 to disable)
 - `azureDevOpsPRViewer.maxPRsToFetch`: Maximum PRs to fetch per project (default: 500)
-- `azureDevOpsPRViewer.enableInlineComments`: Enable inline comment CodeLens (default: true)
-- `azureDevOpsPRViewer.codeLensInterval`: Show 'Add Comment' CodeLens every N lines (default: 1)
+- `azureDevOpsPRViewer.includedProjects`: Filter to specific projects (default: [], empty array = all projects)
+- `azureDevOpsPRViewer.commentsAutoRefreshInterval`: Auto-refresh interval for comments in seconds (default: 30, set to 0 to disable)
 
 ## Usage
 
@@ -53,10 +55,10 @@ Click any PR to view details. Right-click to open in browser.
 ### Add Comments to PR Diffs
 
 1. Click on a file in the PR viewer to open the diff
-2. Click "Add Comment" CodeLens on any line
-3. Enter your comment
+2. Hover over any line to see the comment icon (+)
+3. Click the comment icon and enter your comment
 
-Alternatively, right-click in the diff and select "Add PR Comment to Line".
+Comments are displayed inline using VS Code's native commenting system, showing existing PR comments and allowing you to add new ones directly to Azure DevOps.
 
 ### Troubleshooting
 
@@ -73,6 +75,15 @@ Alternatively, right-click in the diff and select "Add PR Comment to Line".
 - Verify your organization name in settings
 
 ## Release Notes
+
+### 1.2.0
+
+- Added project filtering to focus on specific projects
+- Improved performance with intelligent caching and parallel data fetching
+- Refactored commenting system to use VS Code's native Comments API
+- Added auto-refresh for comments
+- Simplified UI with shorter command titles
+- Fixed marketplace display with proper icon and repository URL
 
 ### 1.0.0
 
