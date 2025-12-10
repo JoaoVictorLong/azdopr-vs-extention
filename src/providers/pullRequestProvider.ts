@@ -127,7 +127,7 @@ export class PullRequestProvider
 			return this.getGroupedByProjectView();
 		} catch (error) {
 			const errorMessage =
-				error instanceof Error ? error.message : "Unknown error";
+				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
 			return [
 				new PRTreeItem(
 					`Error: ${errorMessage}`,

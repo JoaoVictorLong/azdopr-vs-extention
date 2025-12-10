@@ -10,11 +10,19 @@ import {
     type PRFileContext,
 } from "../services/prContextManager";
 import { PRCacheService, type PRIteration } from "../services/prCache";
+import {
+    formatTimeAgo,
+    getThreadStatusLabel,
+    cleanCommentContent,
+} from "../utils/commentFormatter";
 
 export class PullRequestViewerPanel {
     private static _currentPanel: PullRequestViewerPanel | undefined;
     private static _contentProviderRegistered: boolean = false;
-    private static readonly _virtualFileCache: Map<string, string> = new Map();
+    private static readonly _virtualFileCache: Map<
+        string,
+        { content: string; timestamp: number; prId: number }
+    > = new Map();
     private static _markedPromise: Promise<any> | undefined;
 
     public static get currentPanel(): PullRequestViewerPanel | undefined {
@@ -121,7 +129,43 @@ export class PullRequestViewerPanel {
         await instance._update();
     }
 
+    /**
+     * Clean up virtual file cache
+     * Removes old entries and entries for a specific PR
+     */
+    private static cleanupCache(prId?: number): void {
+        const now = Date.now();
+        const maxAge = 30 * 60 * 1000; // 30 minutes
+
+        const keysToRemove: string[] = [];
+        for (const [key, value] of PullRequestViewerPanel._virtualFileCache) {
+            // Remove if it's for the specified PR
+            if (prId !== undefined && value.prId === prId) {
+                keysToRemove.push(key);
+            }
+            // Remove if older than max age
+            else if (now - value.timestamp > maxAge) {
+                keysToRemove.push(key);
+            }
+        }
+
+        for (const key of keysToRemove) {
+            PullRequestViewerPanel._virtualFileCache.delete(key);
+        }
+
+        if (keysToRemove.length > 0) {
+            console.log(
+                `[PullRequestViewerPanel] Cleaned up ${keysToRemove.length} cached file(s)`,
+            );
+        }
+    }
+
     public dispose() {
+        // Clean up cache for this PR
+        if (this.pullRequest) {
+            PullRequestViewerPanel.cleanupCache(this.pullRequest.pullRequestId);
+        }
+
         PullRequestViewerPanel._currentPanel = undefined;
 
         this._panel.dispose();
@@ -573,23 +617,23 @@ export class PullRequestViewerPanel {
                             PullRequestViewerPanel._contentProviderRegistered = true;
                             vscode.workspace.registerTextDocumentContentProvider("azdo-pr", {
                                 provideTextDocumentContent: (uri: vscode.Uri): string => {
-                                    return (
-                                        PullRequestViewerPanel._virtualFileCache.get(
-                                            uri.toString(),
-                                        ) || ""
+                                    const cached = PullRequestViewerPanel._virtualFileCache.get(
+                                        uri.toString(),
                                     );
+                                    return cached ? cached.content : "";
                                 },
                             });
                         }
 
-                        // Cache the content for both versions
+                        // Cache the content for both versions with timestamps
+                        const now = Date.now();
                         PullRequestViewerPanel._virtualFileCache.set(
                             baseUri.toString(),
-                            baseContent,
+                            { content: baseContent, timestamp: now, prId },
                         );
                         PullRequestViewerPanel._virtualFileCache.set(
                             modifiedUri.toString(),
-                            modifiedContent,
+                            { content: modifiedContent, timestamp: now, prId },
                         );
 
                         // Create title for diff view
@@ -1552,15 +1596,15 @@ export class PullRequestViewerPanel {
                 </div>
             </div>
             <div class="pr-meta">
-                #${pr.pullRequestId} opened on ${createdDate} at ${createdTime} by ${this._escapeHtml(pr.createdBy?.displayName || "Unknown")}
+                #${pr.pullRequestId} opened on ${createdDate} at ${createdTime} by ${this._escapeHtml(pr.createdBy?.displayName || "[User name unavailable]")}
             </div>
             <div class="pr-meta-secondary">
                 <span class="meta-item">
-                    <span class="meta-label">Repository:</span> ${this._escapeHtml(pr.repository?.name) || "Unknown"}
+                    <span class="meta-label">Repository:</span> ${this._escapeHtml(pr.repository?.name) || "[Repository name unavailable]"}
                 </span>
                 <span class="meta-separator">•</span>
                 <span class="meta-item">
-                    <span class="meta-label">Project:</span> ${this._escapeHtml(pr.repository?.project?.name) || "Unknown"}
+                    <span class="meta-label">Project:</span> ${this._escapeHtml(pr.repository?.project?.name) || "[Project name unavailable]"}
                 </span>
             </div>
             <div class="branch-info">
@@ -1624,7 +1668,7 @@ export class PullRequestViewerPanel {
                     return `
 					<div class="reviewer-item">
 						<div class="reviewer-info">
-							<span class="reviewer-name">${this._escapeHtml(reviewer.displayName || reviewer.uniqueName || "Unknown")}</span>
+							<span class="reviewer-name">${this._escapeHtml(reviewer.displayName || reviewer.uniqueName || "[Reviewer name unavailable]")}</span>
 							${requiredBadge}
 						</div>
 						<div class="reviewer-vote">
@@ -1759,7 +1803,7 @@ export class PullRequestViewerPanel {
                 return `
                 <div class="reviewer-item">
                     <div class="reviewer-info">
-                        <span class="reviewer-name">${this._escapeHtml(reviewer.displayName || reviewer.uniqueName || "Unknown")}</span>
+                        <span class="reviewer-name">${this._escapeHtml(reviewer.displayName || reviewer.uniqueName || "[Reviewer name unavailable]")}</span>
                         ${requiredBadge}
                     </div>
                     <div class="reviewer-vote">
@@ -1904,39 +1948,41 @@ export class PullRequestViewerPanel {
                 }
 
                 const firstComment = thread.comments[0];
-                const authorName = firstComment.author?.displayName || "Unknown";
+                const authorName = firstComment.author?.displayName || "[Author name unavailable]";
                 const rawContent = firstComment.content || "[No content]";
-                const content = this._cleanCommentContent(rawContent);
+                const content = cleanCommentContent(rawContent);
                 const replyCount = thread.comments.length - 1;
 
                 // Get status info - only show badge for meaningful statuses
-                const statusNum = typeof thread.status === 'string' ? parseInt(thread.status, 10) : thread.status;
+                const statusLabel = getThreadStatusLabel(thread.status);
                 let statusBadge = '';
 
                 // Only show status badges for specific non-active states
-                if (statusNum === 2 || statusNum === 4) {
-                    // Resolved or Closed
-                    statusBadge = `<span class="comment-status-badge status-badge-resolved">${this._escapeHtml('Resolved')}</span>`;
-                } else if (statusNum === 3 || statusNum === 5) {
-                    // Won't Fix or By Design
-                    const label = statusNum === 3 ? "Won't Fix" : 'By Design';
-                    statusBadge = `<span class="comment-status-badge status-badge-wontfix">${this._escapeHtml(label)}</span>`;
-                } else if (statusNum === 6) {
-                    // Pending
-                    statusBadge = `<span class="comment-status-badge status-badge-pending">Pending</span>`;
-                }
-                // Don't show badges for Active (1), Unknown (0), or other statuses
+                if (statusLabel !== "Active" && !statusLabel.startsWith("Unknown") && !statusLabel.startsWith("Not Set")) {
+                    const statusNum = typeof thread.status === 'string' ? Number.parseInt(thread.status, 10) : thread.status;
+                    let badgeClass = 'status-badge-unknown';
 
-                const timeAgo = this._formatTimeAgo(thread.lastUpdatedDate);
+                    if (statusNum === 2 || statusNum === 4) {
+                        badgeClass = 'status-badge-resolved';
+                    } else if (statusNum === 3 || statusNum === 5) {
+                        badgeClass = 'status-badge-wontfix';
+                    } else if (statusNum === 6) {
+                        badgeClass = 'status-badge-pending';
+                    }
+
+                    statusBadge = `<span class="comment-status-badge ${badgeClass}">${this._escapeHtml(statusLabel)}</span>`;
+                }
+
+                const timeAgo = formatTimeAgo(thread.lastUpdatedDate);
 
                 // Build replies HTML
                 let repliesHtml = '';
                 if (replyCount > 0) {
                     const replies = thread.comments.slice(1).map(comment => {
-                        const replyAuthor = comment.author?.displayName || "Unknown";
+                        const replyAuthor = comment.author?.displayName || "[Author name unavailable]";
                         const rawReplyContent = comment.content || "[No content]";
-                        const replyContent = this._cleanCommentContent(rawReplyContent);
-                        const replyTime = this._formatTimeAgo(comment.publishedDate);
+                        const replyContent = cleanCommentContent(rawReplyContent);
+                        const replyTime = formatTimeAgo(comment.publishedDate);
 
                         return `
                         <div class="comment-reply">
@@ -1961,7 +2007,6 @@ export class PullRequestViewerPanel {
                         ${statusBadge ? `<div class="comment-header-right">${statusBadge}</div>` : ''}
                     </div>
                     <div class="comment-body">${this._escapeHtml(content)}</div>
-                    ${replyCount > 0 ? `<div class="comment-reply-count">${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}</div>` : ''}
                     ${repliesHtml}
                 </div>`;
             })
@@ -1977,54 +2022,6 @@ export class PullRequestViewerPanel {
         </div>`;
     }
 
-    /**
-     * Format a date as time ago (e.g., "2h ago", "3d ago")
-     */
-    private _formatTimeAgo(date: Date): string {
-        const now = new Date();
-        const diffMs = now.getTime() - date.getTime();
-        const diffMins = Math.floor(diffMs / 60000);
-        const diffHours = Math.floor(diffMs / 3600000);
-        const diffDays = Math.floor(diffMs / 86400000);
-
-        if (diffMins < 1) return "just now";
-        if (diffMins < 60) return `${diffMins}m ago`;
-        if (diffHours < 24) return `${diffHours}h ago`;
-        if (diffDays < 7) return `${diffDays}d ago`;
-        return date.toLocaleDateString();
-    }
-
-    /**
-     * Clean up comment content by removing GUID mentions and formatting
-     */
-    private _cleanCommentContent(content: string): string {
-        // Remove GUID mentions like @<5B8B71B7-3EB7-6574-B377-A695965DBDA8>
-        // These appear when users are mentioned but can't be resolved
-        let cleaned = content.replaceAll(/@<[A-F0-9-]+>/gi, '@user');
-
-        // Trim whitespace
-        cleaned = cleaned.trim();
-
-        return cleaned;
-    }
-
-    /**
-     * Get human-readable label for thread status
-     */
-    private _getThreadStatusLabel(status: string | number | undefined | null): string {
-        const statusMap: { [key: string]: string } = {
-            "0": "Unknown",
-            "1": "Active",
-            "2": "Resolved",
-            "3": "Won't Fix",
-            "4": "Closed",
-            "5": "By Design",
-            "6": "Pending",
-        };
-        return status !== undefined && status !== null
-            ? statusMap[status.toString()] || "Unknown"
-            : "Unknown";
-    }
 
     private _getFileChangesHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
         if (fileChanges.length === 0) {

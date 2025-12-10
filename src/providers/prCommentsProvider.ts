@@ -6,6 +6,10 @@ import type {
 	PRComment,
 	PRUpdate,
 } from "../services/azureDevOpsClient";
+import {
+	formatTimeAgo,
+	getThreadStatusLabel,
+} from "../utils/commentFormatter";
 
 type SortMode = "date" | "file" | "status";
 
@@ -295,7 +299,7 @@ export class PRCommentsProvider
 		const statusGroups = new Map<string, PRThread[]>();
 
 		for (const thread of threads) {
-			const status = this.getThreadStatusLabel(thread.status);
+			const status = getThreadStatusLabel(thread.status);
 			if (!statusGroups.has(status)) {
 				statusGroups.set(status, []);
 			}
@@ -324,7 +328,7 @@ export class PRCommentsProvider
 		// Handle threads without comments (system activity updates)
 		if (!thread.comments || thread.comments.length === 0) {
 			const label = "System Activity";
-			const description = this.formatTimestamp(thread.lastUpdatedDate);
+			const description = formatTimeAgo(thread.lastUpdatedDate);
 
 			const item = new CommentTreeItem(
 				label,
@@ -345,7 +349,7 @@ export class PRCommentsProvider
 		const commentCount = thread.comments.length;
 
 		// Handle comments without content or author (defensive)
-		const authorName = firstComment.author?.displayName || "Unknown";
+		const authorName = firstComment.author?.displayName || "[Author name unavailable]";
 		const content = firstComment.content || "[No content]";
 
 		// Create label with first comment preview
@@ -371,7 +375,7 @@ export class PRCommentsProvider
 		}
 
 		// Add status
-		parts.push(this.getThreadStatusLabel(thread.status));
+		parts.push(getThreadStatusLabel(thread.status));
 
 		// Add comment count if more than 1
 		if (commentCount > 1) {
@@ -379,7 +383,7 @@ export class PRCommentsProvider
 		}
 
 		// Add timestamp
-		parts.push(this.formatTimestamp(thread.lastUpdatedDate));
+		parts.push(formatTimeAgo(thread.lastUpdatedDate));
 
 		const description = parts.join(" • ");
 
@@ -393,7 +397,7 @@ export class PRCommentsProvider
 		);
 
 		item.iconPath = this.getStatusIcon(
-			this.getThreadStatusLabel(thread.status),
+			getThreadStatusLabel(thread.status),
 		);
 		item.tooltip = this.createThreadTooltip(thread);
 		item.thread = thread;
@@ -410,7 +414,7 @@ export class PRCommentsProvider
 	}
 
 	private createUpdateItem(update: PRUpdate): CommentTreeItem {
-		const description = this.formatTimestamp(update.createdDate);
+		const description = formatTimeAgo(update.createdDate);
 		const label = update.description || "PR Update";
 
 		const item = new CommentTreeItem(
@@ -424,7 +428,7 @@ export class PRCommentsProvider
 			"git-commit",
 			new vscode.ThemeColor("charts.blue"),
 		);
-		item.tooltip = `${update.createdBy?.displayName || "Unknown"} - ${update.createdDate.toLocaleString()}`;
+		item.tooltip = `${update.createdBy?.displayName || "[User name unavailable]"} - ${update.createdDate.toLocaleString()}`;
 		item.sortDate = update.createdDate;
 
 		return item;
@@ -435,9 +439,9 @@ export class PRCommentsProvider
 		thread: PRThread,
 	): CommentTreeItem {
 		const preview = this.getCommentPreview(comment.content || "");
-		const authorName = comment.author?.displayName || "Unknown";
+		const authorName = comment.author?.displayName || "[Author name unavailable]";
 		const label = `${authorName}: ${preview}`;
-		const description = this.formatTimestamp(comment.publishedDate);
+		const description = formatTimeAgo(comment.publishedDate);
 
 		const item = new CommentTreeItem(
 			label,
@@ -471,24 +475,6 @@ export class PRCommentsProvider
 		return parts.at(-1) || filePath;
 	}
 
-	private getThreadStatusLabel(
-		status: string | number | undefined | null,
-	): string {
-		// Azure DevOps thread status values
-		// 0 = unknown, 1 = active, 2 = fixed, 3 = won't fix, 4 = closed, 5 = by design, 6 = pending
-		const statusMap: { [key: string]: string } = {
-			"0": "Unknown",
-			"1": "Active",
-			"2": "Resolved",
-			"3": "Won't Fix",
-			"4": "Closed",
-			"5": "By Design",
-			"6": "Pending",
-		};
-		return status !== undefined && status !== null
-			? statusMap[status.toString()] || "Unknown"
-			: "Unknown";
-	}
 
 	private getStatusIcon(statusLabel: string): vscode.ThemeIcon {
 		switch (statusLabel.toLowerCase()) {
@@ -513,31 +499,6 @@ export class PRCommentsProvider
 		}
 	}
 
-	private formatTimestamp(date: Date): string {
-		const now = new Date();
-		const diffMs = now.getTime() - date.getTime();
-		const diffMins = Math.floor(diffMs / 60000);
-		const diffHours = Math.floor(diffMs / 3600000);
-		const diffDays = Math.floor(diffMs / 86400000);
-
-		if (diffMins < 1) {
-			return "just now";
-		}
-
-		if (diffMins < 60) {
-			return `${diffMins}m ago`;
-		}
-
-		if (diffHours < 24) {
-			return `${diffHours}h ago`;
-		}
-
-		if (diffDays < 7) {
-			return `${diffDays}d ago`;
-		}
-
-		return date.toLocaleDateString();
-	}
 
 	private createThreadTooltip(thread: PRThread): vscode.MarkdownString {
 		const tooltip = new vscode.MarkdownString();
@@ -548,7 +509,7 @@ export class PRCommentsProvider
 		tooltip.appendMarkdown(`${firstComment.content}\n\n`);
 		tooltip.appendMarkdown(`---\n\n`);
 		tooltip.appendMarkdown(
-			`**Status:** ${this.getThreadStatusLabel(thread.status)}\n\n`,
+			`**Status:** ${getThreadStatusLabel(thread.status)}\n\n`,
 		);
 
 		if (thread.threadContext?.filePath) {

@@ -867,6 +867,7 @@ export class AzureDevOpsClient {
 		id: string;
 		displayName: string;
 		uniqueName: string;
+		imageUrl?: string;
 	}> {
 		const headers = await this.getAuthHeaders();
 		const url = "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.0";
@@ -877,6 +878,57 @@ export class AzureDevOpsClient {
 			id: response.data.id,
 			displayName: response.data.displayName,
 			uniqueName: response.data.emailAddress || response.data.publicAlias,
+			imageUrl: response.data.coreAttributes?.Avatar?.value?.value,
 		};
+	}
+
+	/**
+	 * Fetch a profile image URL and convert it to a data URI
+	 * Images are cached to avoid repeated fetches
+	 * @param imageUrl The Azure DevOps image URL
+	 * @returns Data URI string or undefined if fetch fails
+	 */
+	async getImageAsDataUri(imageUrl: string): Promise<string | undefined> {
+		if (!imageUrl) {
+			console.log('[AzureDevOpsClient] No image URL provided');
+			return undefined;
+		}
+
+		// Check cache first (images cached for 1 hour)
+		const cacheKey = `image:${imageUrl}`;
+		const cached = this.cache.get(cacheKey);
+		if (cached && Date.now() - cached.timestamp < cached.ttl) {
+			console.log(`[AzureDevOpsClient] Using cached image for ${imageUrl}`);
+			return cached.data;
+		}
+
+		try {
+			console.log(`[AzureDevOpsClient] Fetching image from ${imageUrl}`);
+			const headers = await this.getAuthHeaders();
+			const response = await this.axiosInstance.get(imageUrl, {
+				headers,
+				responseType: 'arraybuffer',
+			});
+
+			// Convert to base64
+			const buffer = Buffer.from(response.data);
+			const base64 = buffer.toString('base64');
+			const contentType = response.headers['content-type'] || 'image/png';
+			const dataUri = `data:${contentType};base64,${base64}`;
+
+			console.log(`[AzureDevOpsClient] Successfully converted image to data URI (${base64.length} bytes)`);
+
+			// Cache for 1 hour
+			this.cache.set(cacheKey, {
+				data: dataUri,
+				timestamp: Date.now(),
+				ttl: 60 * 60 * 1000,
+			});
+
+			return dataUri;
+		} catch (error) {
+			console.error(`[AzureDevOpsClient] Failed to fetch image from ${imageUrl}:`, error);
+			return undefined;
+		}
 	}
 }

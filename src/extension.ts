@@ -7,12 +7,14 @@ import {
 } from "./services/azureDevOpsClient";
 import { PullRequestViewerPanel } from "./views/pullRequestViewerPanel";
 import { PRCommentController } from "./providers/prCommentController";
+import { CommentEventCoordinator } from "./services/commentEventCoordinator";
 
 let pullRequestProvider: PullRequestProvider;
 let authProvider: AzureDevOpsAuthProvider;
 let refreshInterval: NodeJS.Timeout | undefined;
 let azureDevOpsClient: AzureDevOpsClient;
 let commentController: PRCommentController;
+let commentEventCoordinator: CommentEventCoordinator;
 
 export async function activate(context: vscode.ExtensionContext) {
 	console.log("Azure DevOps PR Viewer extension is now active");
@@ -50,6 +52,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	commentController = new PRCommentController(azureDevOpsClient);
 	// Initialize asynchronously (don't await to avoid blocking activation)
 	commentController.initialize();
+
+	// Initialize event coordinator for debounced comment loading
+	commentEventCoordinator = new CommentEventCoordinator(commentController);
 
 	// Collect all subscriptions
 	const subscriptions = [
@@ -174,56 +179,36 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 
 		// ========================================================================
-		// CRITICAL: Event listeners for inline comment display in PR diffs
-		// These listeners are ESSENTIAL for showing Azure DevOps comments inline
-		// in file diff views. They work by detecting when a PR diff document
-		// (scheme: "azdo-pr") is opened or becomes active, then loading comments
-		// from the Azure DevOps API and displaying them using VS Code's Comment API.
+		// CRITICAL: Event coordinator for inline comment display in PR diffs
+		// This replaces the old dual event listeners with a coordinated, debounced
+		// approach that prevents duplicate loads and flickering.
 		//
 		// How it works:
 		// 1. User clicks a file in the PR viewer's "Files Changed" tab
 		// 2. PullRequestViewerPanel creates virtual documents with "azdo-pr" scheme
-		// 3. These event listeners detect the document and trigger comment loading
-		// 4. PRCommentController fetches comments and displays them inline
+		// 3. CommentEventCoordinator debounces and coordinates comment loading
+		// 4. PRCommentController syncs threads differentially (no dispose/recreate)
 		//
 		// DO NOT REMOVE these listeners - comments will NOT appear without them!
 		// ========================================================================
 
 		// Listen for when text documents are opened (catches initial file opens)
-		vscode.workspace.onDidOpenTextDocument(async (document) => {
-			// Only process PR diff documents (identified by "azdo-pr" scheme)
-			if (document.uri.scheme === "azdo-pr") {
-				console.log(
-					`[Extension] PR diff document opened: ${document.uri.toString()}`,
-				);
-				try {
-					await commentController.loadCommentsForDocument(document);
-				} catch (error) {
-					console.error(
-						`[Extension] Failed to load comments for ${document.uri.toString()}:`,
-						error,
-					);
-				}
-			}
-		}),
+		vscode.workspace.onDidOpenTextDocument(
+			commentEventCoordinator.handleDocumentEvent.bind(commentEventCoordinator)
+		),
 
 		// Listen for when the active editor changes (catches tab switches)
-		vscode.window.onDidChangeActiveTextEditor(async (editor) => {
-			// Only process when an editor is active and contains a PR diff document
-			if (editor && editor.document.uri.scheme === "azdo-pr") {
-				console.log(
-					`[Extension] Active editor changed to PR diff: ${editor.document.uri.toString()}`,
-				);
-				try {
-					await commentController.loadCommentsForDocument(editor.document);
-				} catch (error) {
-					console.error(
-						`[Extension] Failed to load comments for ${editor.document.uri.toString()}:`,
-						error,
-					);
-				}
-			}
-		}),
+		vscode.window.onDidChangeActiveTextEditor(
+			commentEventCoordinator.handleEditorChange.bind(commentEventCoordinator)
+		),
+
+		// Listen for when documents are closed (cleanup resources)
+		vscode.workspace.onDidCloseTextDocument(
+			commentEventCoordinator.handleDocumentClose.bind(commentEventCoordinator)
+		),
+
+		// Register the event coordinator for disposal
+		commentEventCoordinator,
 	];
 
 	// Push all subscriptions at once
