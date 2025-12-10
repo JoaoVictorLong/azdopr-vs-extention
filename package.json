@@ -2,7 +2,7 @@
   "name": "azdopr",
   "displayName": "Azure DevOps PR Viewer",
   "description": "View all Pull Requests across your entire Azure DevOps organization in one place",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "publisher": "johncwaters",
   "repository": "https://github.com/johncwaters/azdopr",
   "icon": "resources/azdopr-icon.png",
