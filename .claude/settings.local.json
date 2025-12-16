@@ -5,7 +5,9 @@
       "Bash(cat:*)",
       "Bash(npx tsc:*)",
       "Bash(npm install:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(npm run lint)",
+      "Bash(npx biome:*)"
     ],
     "deny": [],
     "ask": []

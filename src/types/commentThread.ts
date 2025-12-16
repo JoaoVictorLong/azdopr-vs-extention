@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
-import type { PRThread, PRComment } from "../services/azureDevOpsClient";
-import { AzDOComment, TemporaryComment } from "./comments";
+import type { PRComment, PRThread } from "../services/azureDevOpsClient";
 import { getThreadStatusLabel } from "../utils/commentFormatter";
+import { Logger } from "../utils/logger";
+import { AzDOComment, TemporaryComment } from "./comments";
+
+const logger = Logger.getInstance();
 
 /**
  * PR context information for comment threads
@@ -114,9 +117,7 @@ export class CommentThreadManager {
 
 		this.threads.set(threadKey, thread);
 
-		console.log(
-			`[ThreadManager] Created new thread ${threadId} at line ${range.start.line + 1}`,
-		);
+		logger.debug(`ThreadManager: Created new thread ${threadId} at line ${range.start.line + 1}`);
 
 		return thread;
 	}
@@ -159,13 +160,7 @@ export class CommentThreadManager {
 			// If existing comment is temporary, create real one
 			if (existingComment instanceof TemporaryComment) {
 				updatedComments.push(
-					new AzDOComment(
-						serverComment,
-						thread.threadId,
-						thread,
-						organizationUrl,
-						currentUserId,
-					),
+					new AzDOComment(serverComment, thread.threadId, thread, organizationUrl, currentUserId),
 				);
 				hasChanges = true;
 				continue;
@@ -181,9 +176,7 @@ export class CommentThreadManager {
 					organizationUrl,
 					currentUserId,
 				);
-				console.log(
-					`[ThreadManager] Updated thread ${thread.threadId}: comment order changed`,
-				);
+				logger.debug(`ThreadManager: Updated thread ${thread.threadId}: comment order changed`);
 				return true;
 			}
 
@@ -198,9 +191,7 @@ export class CommentThreadManager {
 		if (hasChanges) {
 			// Trigger UI update by reassigning array
 			thread.comments = updatedComments;
-			console.log(
-				`[ThreadManager] Updated thread ${thread.threadId}: content changed`,
-			);
+			logger.debug(`ThreadManager: Updated thread ${thread.threadId}: content changed`);
 		}
 
 		return hasChanges;
@@ -217,26 +208,15 @@ export class CommentThreadManager {
 		currentUserId?: string,
 	): AzDOComment[] {
 		return serverComments.map(
-			(comment) =>
-				new AzDOComment(
-					comment,
-					threadId,
-					parent,
-					organizationUrl,
-					currentUserId,
-				),
+			(comment) => new AzDOComment(comment, threadId, parent, organizationUrl, currentUserId),
 		);
 	}
 
 	/**
 	 * Update thread status and state
 	 */
-	public updateThreadStatus(
-		thread: AzDOCommentThread,
-		status: string | number,
-	): void {
-		const statusNum =
-			typeof status === "string" ? Number.parseInt(status, 10) : status;
+	public updateThreadStatus(thread: AzDOCommentThread, status: string | number): void {
+		const statusNum = typeof status === "string" ? Number.parseInt(status, 10) : status;
 
 		// Set thread state based on status
 		// Status 2 = Resolved, Status 4 = Closed
@@ -248,11 +228,7 @@ export class CommentThreadManager {
 
 		// Update label
 		const statusLabel = getThreadStatusLabel(status);
-		if (
-			statusLabel &&
-			statusLabel !== "Active" &&
-			!statusLabel.startsWith("[Status:")
-		) {
+		if (statusLabel && statusLabel !== "Active" && !statusLabel.startsWith("[Status:")) {
 			thread.label = statusLabel;
 		} else {
 			thread.label = undefined;
@@ -262,14 +238,9 @@ export class CommentThreadManager {
 	/**
 	 * Add a temporary comment to a thread
 	 */
-	public addTemporaryComment(
-		thread: AzDOCommentThread,
-		tempComment: TemporaryComment,
-	): void {
+	public addTemporaryComment(thread: AzDOCommentThread, tempComment: TemporaryComment): void {
 		thread.comments = [...thread.comments, tempComment];
-		console.log(
-			`[ThreadManager] Added temporary comment to thread ${thread.threadId}`,
-		);
+		logger.debug(`ThreadManager: Added temporary comment to thread ${thread.threadId}`);
 	}
 
 	/**
@@ -297,13 +268,9 @@ export class CommentThreadManager {
 	/**
 	 * Remove a temporary comment (on error)
 	 */
-	public removeTemporaryComment(
-		thread: AzDOCommentThread,
-		tempId: string,
-	): void {
+	public removeTemporaryComment(thread: AzDOCommentThread, tempId: string): void {
 		thread.comments = thread.comments.filter(
-			(c) =>
-				!(c instanceof TemporaryComment && c.tempId === tempId),
+			(c) => !(c instanceof TemporaryComment && c.tempId === tempId),
 		);
 		console.log(
 			`[ThreadManager] Removed temporary comment ${tempId} from thread ${thread.threadId}`,
@@ -330,10 +297,7 @@ export class CommentThreadManager {
 		// Find threads to remove (exist locally but not on server)
 		const threadsToRemove: string[] = [];
 		for (const [key, thread] of this.threads) {
-			if (
-				key.startsWith(uriString) &&
-				!serverThreadIds.has(thread.threadId)
-			) {
+			if (key.startsWith(uriString) && !serverThreadIds.has(thread.threadId)) {
 				threadsToRemove.push(key);
 			}
 		}
@@ -344,9 +308,7 @@ export class CommentThreadManager {
 			if (thread) {
 				thread.dispose();
 				this.threads.delete(key);
-				console.log(
-					`[ThreadManager] Removed stale thread ${thread.threadId}`,
-				);
+				logger.debug(`ThreadManager: Removed stale thread ${thread.threadId}`);
 			}
 		}
 
@@ -380,20 +342,10 @@ export class CommentThreadManager {
 			const range = new vscode.Range(zeroBasedLine, 0, zeroBasedLine, 0);
 
 			// Get or create thread
-			const thread = this.getOrCreateThread(
-				document,
-				range,
-				serverThread.id,
-				prContext,
-			);
+			const thread = this.getOrCreateThread(document, range, serverThread.id, prContext);
 
 			// Update comments differentially
-			this.updateThreadComments(
-				thread,
-				serverThread.comments,
-				organizationUrl,
-				currentUserId,
-			);
+			this.updateThreadComments(thread, serverThread.comments, organizationUrl, currentUserId);
 
 			// Update status
 			this.updateThreadStatus(thread, serverThread.status);
@@ -418,9 +370,7 @@ export class CommentThreadManager {
 			this.threads.delete(key);
 		}
 
-		console.log(
-			`[ThreadManager] Cleared ${threadsToRemove.length} threads for ${uri.path}`,
-		);
+		logger.debug(`ThreadManager: Cleared ${threadsToRemove.length} threads for ${uri.path}`);
 	}
 
 	/**
@@ -431,7 +381,7 @@ export class CommentThreadManager {
 			thread.dispose();
 		}
 		this.threads.clear();
-		console.log("[ThreadManager] Cleared all threads");
+		logger.debug("ThreadManager: Cleared all threads");
 	}
 
 	/**

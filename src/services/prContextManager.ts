@@ -124,9 +124,7 @@ export class PRContextManager {
 	 * Accepts either a file path string or a URI
 	 */
 	public clearFileContext(filePathOrUri: string | vscode.Uri): void {
-		const key = typeof filePathOrUri === "string"
-			? filePathOrUri
-			: filePathOrUri.toString();
+		const key = typeof filePathOrUri === "string" ? filePathOrUri : filePathOrUri.toString();
 
 		this.filePathToPRMap.delete(key);
 		this.fileContextMap.delete(key);

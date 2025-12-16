@@ -1,14 +1,14 @@
 import * as vscode from "vscode";
 import { AzureDevOpsAuthProvider } from "./auth/authProvider";
-import { PullRequestProvider } from "./providers/pullRequestProvider";
-import {
-	AzureDevOpsClient,
-	type PullRequest,
-} from "./services/azureDevOpsClient";
-import { PullRequestViewerPanel } from "./views/pullRequestViewerPanel";
 import { PRCommentController } from "./providers/prCommentController";
+import { PullRequestProvider } from "./providers/pullRequestProvider";
+import { AzureDevOpsClient, type PullRequest } from "./services/azureDevOpsClient";
 import { CommentEventCoordinator } from "./services/commentEventCoordinator";
 import { LfsCache } from "./services/lfs/lfsCache";
+import { Logger } from "./utils/logger";
+import { PullRequestViewerPanel } from "./views/pullRequestViewerPanel";
+
+const logger = Logger.getInstance();
 
 let pullRequestProvider: PullRequestProvider;
 let authProvider: AzureDevOpsAuthProvider;
@@ -18,7 +18,7 @@ let commentController: PRCommentController;
 let commentEventCoordinator: CommentEventCoordinator;
 
 export async function activate(context: vscode.ExtensionContext) {
-	console.log("Azure DevOps PR Viewer extension is now active");
+	logger.info("Azure DevOps PR Viewer extension is now active");
 
 	// Initialize authentication provider
 	authProvider = new AzureDevOpsAuthProvider();
@@ -35,10 +35,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	azureDevOpsClient = new AzureDevOpsClient(authProvider);
 
 	// Initialize the Pull Request tree view provider
-	pullRequestProvider = new PullRequestProvider(
-		azureDevOpsClient,
-		authProvider,
-	);
+	pullRequestProvider = new PullRequestProvider(azureDevOpsClient, authProvider);
 
 	// Register the tree view
 	vscode.window.registerTreeDataProvider("azureDevOpsPRs", pullRequestProvider);
@@ -59,13 +56,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Collect all subscriptions
 	const subscriptions = [
-		vscode.commands.registerCommand(
-			"azureDevOpsPRs.refreshComments",
-			async () => {
-				console.log("[Extension] Manual comment refresh requested");
-				await commentController.refresh();
-			},
-		),
+		vscode.commands.registerCommand("azureDevOpsPRs.refreshComments", async () => {
+			logger.info("Manual comment refresh requested");
+			await commentController.refresh();
+		}),
 		commentController,
 		vscode.commands.registerCommand("azureDevOpsPRs.refresh", () => {
 			azureDevOpsClient.clearCache();
@@ -74,14 +68,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand("azureDevOpsPRs.signIn", async () => {
 			try {
 				await authProvider.signIn();
-				await vscode.commands.executeCommand(
-					"setContext",
-					"azureDevOpsPRs:authenticated",
-					true,
-				);
-				vscode.window.showInformationMessage(
-					"Successfully signed in to Azure DevOps PR Viewer",
-				);
+				await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", true);
+				vscode.window.showInformationMessage("Successfully signed in to Azure DevOps PR Viewer");
 				pullRequestProvider.refresh();
 			} catch (error) {
 				vscode.window.showErrorMessage(`Sign in failed: ${error}`);
@@ -89,17 +77,13 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 		vscode.commands.registerCommand("azureDevOpsPRs.signOut", async () => {
 			await authProvider.signOut();
-			await vscode.commands.executeCommand(
-				"setContext",
-				"azureDevOpsPRs:authenticated",
-				false,
-			);
+			await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", false);
 			vscode.window.showInformationMessage("Signed out from Azure DevOps PR Viewer");
 			pullRequestProvider.refresh();
 		}),
 		vscode.commands.registerCommand(
 			"azureDevOpsPRs.openPR",
-			async (arg: any) => {
+			async (arg: string | { pullRequest: PullRequest } | PullRequest | undefined) => {
 				let url: string | undefined;
 
 				if (typeof arg === "string") {
@@ -107,18 +91,18 @@ export async function activate(context: vscode.ExtensionContext) {
 					url = arg;
 				}
 
-				if (arg?.pullRequest) {
+				if (arg && typeof arg === "object" && "pullRequest" in arg) {
 					// Called from context menu - arg is a tree item
-					const pr = arg.pullRequest as PullRequest;
+					const pr = arg.pullRequest;
 					const org = vscode.workspace
 						.getConfiguration("azureDevOpsPRViewer")
 						.get<string>("organization", "");
 					url = `https://dev.azure.com/${org}/${pr.repository.project.name}/_git/${pr.repository.name}/pullrequest/${pr.pullRequestId}`;
 				}
 
-				if (arg?.repository) {
+				if (arg && typeof arg === "object" && "repository" in arg) {
 					// Called with PR object directly
-					const pr = arg as PullRequest;
+					const pr = arg;
 					const org = vscode.workspace
 						.getConfiguration("azureDevOpsPRViewer")
 						.get<string>("organization", "");
@@ -135,17 +119,17 @@ export async function activate(context: vscode.ExtensionContext) {
 		),
 		vscode.commands.registerCommand(
 			"azureDevOpsPRs.viewPR",
-			async (arg: any) => {
+			async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
 				let pr: PullRequest | undefined;
 
-				if (arg?.pullRequest) {
+				if (arg && typeof arg === "object" && "pullRequest" in arg) {
 					// Called from context menu or tree item click - arg is a tree item
-					pr = arg.pullRequest as PullRequest;
+					pr = arg.pullRequest;
 				}
 
-				if (arg?.repository) {
+				if (arg && typeof arg === "object" && "repository" in arg) {
 					// Called with PR object directly
-					pr = arg as PullRequest;
+					pr = arg;
 				}
 
 				if (!pr) {
@@ -153,11 +137,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 
-				await PullRequestViewerPanel.createOrShow(
-					context.extensionUri,
-					azureDevOpsClient,
-					pr,
-				);
+				await PullRequestViewerPanel.createOrShow(context.extensionUri, azureDevOpsClient, pr);
 			},
 		),
 		vscode.commands.registerCommand("azureDevOpsPRs.clearLfsCache", async () => {
@@ -173,7 +153,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				const action = await vscode.window.showWarningMessage(
 					`Clear LFS cache? This will remove ${stats.fileCount} cached file(s) (${stats.totalSizeMB.toFixed(2)} MB)`,
 					"Clear Cache",
-					"Cancel"
+					"Cancel",
 				);
 
 				if (action === "Clear Cache") {
@@ -181,9 +161,9 @@ export async function activate(context: vscode.ExtensionContext) {
 					vscode.window.showInformationMessage("LFS cache cleared successfully");
 				}
 			} catch (error) {
-				console.error("[Extension] Failed to clear LFS cache:", error);
+				logger.error("Failed to clear LFS cache", error);
 				vscode.window.showErrorMessage(
-					`Failed to clear LFS cache: ${error instanceof Error ? error.message : String(error)}`
+					`Failed to clear LFS cache: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
 		}),
@@ -222,17 +202,17 @@ export async function activate(context: vscode.ExtensionContext) {
 
 		// Listen for when text documents are opened (catches initial file opens)
 		vscode.workspace.onDidOpenTextDocument(
-			commentEventCoordinator.handleDocumentEvent.bind(commentEventCoordinator)
+			commentEventCoordinator.handleDocumentEvent.bind(commentEventCoordinator),
 		),
 
 		// Listen for when the active editor changes (catches tab switches)
 		vscode.window.onDidChangeActiveTextEditor(
-			commentEventCoordinator.handleEditorChange.bind(commentEventCoordinator)
+			commentEventCoordinator.handleEditorChange.bind(commentEventCoordinator),
 		),
 
 		// Listen for when documents are closed (cleanup resources)
 		vscode.workspace.onDidCloseTextDocument(
-			commentEventCoordinator.handleDocumentClose.bind(commentEventCoordinator)
+			commentEventCoordinator.handleDocumentClose.bind(commentEventCoordinator),
 		),
 
 		// Register the event coordinator for disposal

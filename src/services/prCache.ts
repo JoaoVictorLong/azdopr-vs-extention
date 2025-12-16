@@ -1,12 +1,5 @@
-import type { PullRequest, PRFileChange, PRThread } from "./azureDevOpsClient";
-
-/**
- * Interface for PR iteration data
- */
-export interface PRIteration {
-	id: number;
-	[key: string]: any;
-}
+import { CACHE_CLEANUP_INTERVAL_MS, PR_CACHE_TTL_MS } from "../constants/cacheConfig";
+import type { PRFileChange, PRIteration, PRThread, PullRequest } from "./azureDevOpsClient";
 
 /**
  * Interface for cached PR data
@@ -26,7 +19,7 @@ interface CachedPRData {
 export class PRCacheService {
 	private static _instance: PRCacheService | undefined;
 	private readonly cache: Map<string, CachedPRData> = new Map();
-	private readonly defaultTTL: number = 5 * 60 * 1000; // 5 minutes in milliseconds
+	private readonly defaultTTL: number = PR_CACHE_TTL_MS;
 
 	private constructor() {
 		// Private constructor to enforce singleton pattern
@@ -57,7 +50,7 @@ export class PRCacheService {
 	public get(
 		projectId: string,
 		repositoryId: string,
-		pullRequestId: number
+		pullRequestId: number,
 	): CachedPRData | undefined {
 		const key = this.getCacheKey(projectId, repositoryId, pullRequestId);
 		const cached = this.cache.get(key);
@@ -86,7 +79,7 @@ export class PRCacheService {
 		fullDetails: PullRequest,
 		iterations: PRIteration[],
 		fileChanges: PRFileChange[],
-		threads: PRThread[]
+		threads: PRThread[],
 	): void {
 		const key = this.getCacheKey(projectId, repositoryId, pullRequestId);
 		this.cache.set(key, {
@@ -148,10 +141,9 @@ export class PRCacheService {
 	 * Start periodic cleanup of expired cache entries
 	 */
 	private startCleanupInterval(): void {
-		// Run cleanup every minute
 		setInterval(() => {
 			this.cleanup();
-		}, 60 * 1000);
+		}, CACHE_CLEANUP_INTERVAL_MS);
 	}
 
 	/**

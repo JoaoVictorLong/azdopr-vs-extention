@@ -47,10 +47,7 @@ function enhanceMentions(content: string): string {
  * @param organizationUrl The Azure DevOps organization URL
  * @returns Content with work item links
  */
-function linkifyWorkItems(
-	content: string,
-	organizationUrl: string,
-): string {
+function linkifyWorkItems(content: string, organizationUrl: string): string {
 	// Convert #123 to work item links
 	// Azure DevOps work items: https://dev.azure.com/{org}/{project}/_workitems/edit/{id}
 	// Note: We don't have project context here, so we link to the org-level work item

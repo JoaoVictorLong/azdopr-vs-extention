@@ -17,7 +17,13 @@ export default defineConfig({
         "crypto",
         "stream",
         "util",
-        "buffer"
+        "buffer",
+        "fs",
+        "path",
+        "os",
+        "node:fs",
+        "node:path",
+        "node:os"
       ],
     },
     sourcemap: true,

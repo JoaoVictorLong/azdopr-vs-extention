@@ -1,6 +1,9 @@
 import axios, { type AxiosInstance } from "axios";
 import * as vscode from "vscode";
 import type { AzureDevOpsAuthProvider } from "../auth/authProvider";
+import { Logger } from "../utils/logger";
+
+const logger = Logger.getInstance();
 
 export interface PullRequest {
 	pullRequestId: number;
@@ -90,7 +93,7 @@ export interface PRThread {
 		rightFileStart?: { line: number; offset: number };
 		rightFileEnd?: { line: number; offset: number };
 	};
-	properties?: any;
+	properties?: Record<string, unknown>;
 }
 
 export interface PRUpdate {
@@ -127,6 +130,158 @@ export interface PRBuildStatus {
 	url: string;
 }
 
+/**
+ * Internal interfaces for Azure DevOps API responses
+ * These match the raw API response structure before transformation
+ */
+interface AzDOReviewer {
+	id: string;
+	displayName: string;
+	uniqueName: string;
+	imageUrl?: string;
+	vote: number;
+	isRequired?: boolean;
+}
+
+interface AzDOPullRequest {
+	pullRequestId: number;
+	title: string;
+	description: string;
+	createdBy: {
+		displayName: string;
+		uniqueName: string;
+	};
+	creationDate: string;
+	status: string;
+	repository: {
+		id: string;
+		name: string;
+		project: {
+			id: string;
+			name: string;
+		};
+	};
+	reviewers: AzDOReviewer[];
+	url: string;
+	sourceRefName: string;
+	targetRefName: string;
+	isDraft: boolean;
+	lastMergeSourceCommit?: {
+		commitId: string;
+	};
+	lastMergeTargetCommit?: {
+		commitId: string;
+	};
+}
+
+interface AzDOIteration {
+	id: number;
+	description?: string;
+	author: {
+		displayName: string;
+		uniqueName: string;
+	};
+	createdDate: string;
+	updatedDate: string;
+}
+
+interface AzDOFileChange {
+	changeId: number;
+	changeType: string;
+	item: {
+		path: string;
+		isFolder: boolean;
+	};
+	originalPath?: string;
+}
+
+interface AzDOComment {
+	id: number;
+	parentCommentId: number;
+	author: {
+		id: string;
+		displayName: string;
+		uniqueName: string;
+		imageUrl?: string;
+	};
+	content: string;
+	publishedDate: string;
+	lastUpdatedDate: string;
+	commentType: string;
+}
+
+interface AzDOThread {
+	id: number;
+	publishedDate: string;
+	lastUpdatedDate: string;
+	comments: AzDOComment[];
+	status: string;
+	threadContext?: {
+		filePath?: string;
+		leftFileStart?: { line: number; offset: number };
+		leftFileEnd?: { line: number; offset: number };
+		rightFileStart?: { line: number; offset: number };
+		rightFileEnd?: { line: number; offset: number };
+	};
+	properties?: Record<string, unknown>;
+}
+
+interface AzDOUpdate {
+	updateId: number;
+	createdDate: string;
+	createdBy: {
+		displayName: string;
+		uniqueName: string;
+		imageUrl?: string;
+	};
+	description?: string;
+}
+
+interface AzDOBuildStatus {
+	id: number;
+	context?: {
+		name?: string;
+	};
+	description?: string;
+	state: string;
+	targetUrl: string;
+}
+
+interface AzDOThreadCreationRequest {
+	comments: Array<{
+		parentCommentId: number;
+		content: string;
+		commentType: number;
+	}>;
+	status: number;
+	threadContext?: {
+		filePath: string;
+		leftFileStart?: {
+			line: number;
+			offset: number;
+		};
+		leftFileEnd?: {
+			line: number;
+			offset: number;
+		};
+		rightFileStart?: {
+			line: number;
+			offset: number;
+		};
+		rightFileEnd?: {
+			line: number;
+			offset: number;
+		};
+	};
+	pullRequestThreadContext?: {
+		iterationContext: {
+			firstComparingIteration: number;
+			secondComparingIteration: number;
+		};
+	};
+	properties?: Record<string, unknown>;
+}
+
 interface CacheEntry<T> {
 	data: T;
 	timestamp: number;
@@ -136,7 +291,7 @@ interface CacheEntry<T> {
 export class AzureDevOpsClient {
 	private readonly axiosInstance: AxiosInstance;
 	private organization: string = "";
-	private readonly cache = new Map<string, CacheEntry<any>>();
+	private readonly cache = new Map<string, CacheEntry<unknown>>();
 
 	constructor(private readonly authProvider: AzureDevOpsAuthProvider) {
 		this.axiosInstance = axios.create({
@@ -187,7 +342,7 @@ export class AzureDevOpsClient {
 		const now = Date.now();
 
 		if (cached && now - cached.timestamp < cached.ttl) {
-			return cached.data;
+			return cached.data as T;
 		}
 
 		const data = await fetcher();
@@ -214,10 +369,7 @@ export class AzureDevOpsClient {
 		return response.data.value;
 	}
 
-	async getPullRequests(
-		projectId: string,
-		repositoryId: string,
-	): Promise<PullRequest[]> {
+	async getPullRequests(projectId: string, repositoryId: string): Promise<PullRequest[]> {
 		const headers = await this.getAuthHeaders();
 		const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
 		const maxPRs = config.get<number>("maxPRsToFetch", 500);
@@ -225,7 +377,7 @@ export class AzureDevOpsClient {
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests?searchCriteria.status=active&$top=${maxPRs}&api-version=7.0`;
 		const response = await this.axiosInstance.get(url, { headers });
 
-		return response.data.value.map((pr: any) => ({
+		return response.data.value.map((pr: AzDOPullRequest) => ({
 			pullRequestId: pr.pullRequestId,
 			title: pr.title,
 			description: pr.description || "",
@@ -233,7 +385,7 @@ export class AzureDevOpsClient {
 			creationDate: new Date(pr.creationDate),
 			status: pr.status,
 			repository: pr.repository,
-			reviewers: (pr.reviewers || []).map((reviewer: any) => ({
+			reviewers: (pr.reviewers || []).map((reviewer: AzDOReviewer) => ({
 				id: reviewer.id,
 				displayName: reviewer.displayName,
 				uniqueName: reviewer.uniqueName,
@@ -264,9 +416,7 @@ export class AzureDevOpsClient {
 				const includedProjects = config.get<string[]>("includedProjects", []);
 
 				if (includedProjects.length > 0) {
-					projects = projects.filter((p) =>
-						includedProjects.includes(p.name),
-					);
+					projects = projects.filter((p) => includedProjects.includes(p.name));
 					console.log(
 						`Filtered to ${projects.length} projects: ${projects.map((p) => p.name).join(", ")}`,
 					);
@@ -302,7 +452,7 @@ export class AzureDevOpsClient {
 		const response = await this.axiosInstance.get(url, { headers });
 
 		// Transform the raw API response to match the PullRequest interface
-		const pr = response.data;
+		const pr = response.data as AzDOPullRequest;
 		return {
 			pullRequestId: pr.pullRequestId,
 			title: pr.title,
@@ -311,7 +461,7 @@ export class AzureDevOpsClient {
 			creationDate: new Date(pr.creationDate),
 			status: pr.status,
 			repository: pr.repository,
-			reviewers: (pr.reviewers || []).map((reviewer: any) => ({
+			reviewers: (pr.reviewers || []).map((reviewer: AzDOReviewer) => ({
 				id: reviewer.id,
 				displayName: reviewer.displayName,
 				uniqueName: reviewer.uniqueName,
@@ -339,7 +489,7 @@ export class AzureDevOpsClient {
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/iterations?api-version=7.0`;
 		const response = await this.axiosInstance.get(url, { headers });
 
-		return response.data.value.map((iteration: any) => ({
+		return response.data.value.map((iteration: AzDOIteration) => ({
 			id: iteration.id,
 			description: iteration.description || "",
 			author: iteration.author,
@@ -359,7 +509,7 @@ export class AzureDevOpsClient {
 		const response = await this.axiosInstance.get(url, { headers });
 
 		const changes = response.data.changeEntries || [];
-		return changes.map((change: any) => ({
+		return changes.map((change: AzDOFileChange) => ({
 			changeId: change.changeId,
 			changeType: change.changeType,
 			item: change.item,
@@ -376,21 +526,19 @@ export class AzureDevOpsClient {
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/threads?api-version=7.0`;
 		const response = await this.axiosInstance.get(url, { headers });
 
-		console.log(
-			`API returned ${response.data.value.length} threads for PR ${pullRequestId}`,
-		);
+		console.log(`API returned ${response.data.value.length} threads for PR ${pullRequestId}`);
 
-		return response.data.value.map((thread: any) => {
+		return response.data.value.map((thread: AzDOThread) => {
 			// Log thread details for debugging
 			console.log(
-				`Thread ${thread.id}: has ${thread.comments?.length || 0} comments, isDeleted: ${thread.isDeleted}, status: ${thread.status}`,
+				`Thread ${thread.id}: has ${thread.comments?.length || 0} comments, isDeleted: ${(thread as unknown as { isDeleted?: boolean }).isDeleted}, status: ${thread.status}`,
 			);
 
 			return {
 				id: thread.id,
 				publishedDate: new Date(thread.publishedDate),
 				lastUpdatedDate: new Date(thread.lastUpdatedDate),
-				comments: (thread.comments || []).map((comment: any) => ({
+				comments: (thread.comments || []).map((comment: AzDOComment) => ({
 					id: comment.id,
 					parentCommentId: comment.parentCommentId,
 					author: comment.author,
@@ -415,11 +563,9 @@ export class AzureDevOpsClient {
 
 		try {
 			const response = await this.axiosInstance.get(url, { headers });
-			console.log(
-				`API returned ${response.data.value.length} updates for PR ${pullRequestId}`,
-			);
+			console.log(`API returned ${response.data.value.length} updates for PR ${pullRequestId}`);
 
-			return response.data.value.map((update: any) => ({
+			return response.data.value.map((update: AzDOUpdate) => ({
 				updateId: update.updateId,
 				createdDate: new Date(update.createdDate),
 				createdBy: update.createdBy,
@@ -441,7 +587,7 @@ export class AzureDevOpsClient {
 			const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/statuses?api-version=7.0`;
 			const response = await this.axiosInstance.get(url, { headers });
 
-			return response.data.value.map((status: any) => ({
+			return response.data.value.map((status: AzDOBuildStatus) => ({
 				id: status.id,
 				name: status.context?.name || status.description || "Build",
 				status: status.state,
@@ -464,11 +610,7 @@ export class AzureDevOpsClient {
 		try {
 			const headers = await this.getAuthHeaders();
 			// Get the PR details to find the source and target commits
-			const prDetails = await this.getPullRequestDetails(
-				projectId,
-				repositoryId,
-				pullRequestId,
-			);
+			const prDetails = await this.getPullRequestDetails(projectId, repositoryId, pullRequestId);
 			const sourceCommit = prDetails.lastMergeSourceCommit?.commitId;
 			const targetCommit = prDetails.lastMergeTargetCommit?.commitId;
 
@@ -485,10 +627,8 @@ export class AzureDevOpsClient {
 				this.axiosInstance.get(targetUrl, { headers }),
 			]);
 
-			const sourceContent =
-				sourceResponse.status === "fulfilled" ? sourceResponse.value.data : "";
-			const targetContent =
-				targetResponse.status === "fulfilled" ? targetResponse.value.data : "";
+			const sourceContent = sourceResponse.status === "fulfilled" ? sourceResponse.value.data : "";
+			const targetContent = targetResponse.status === "fulfilled" ? targetResponse.value.data : "";
 
 			// Return a simple diff representation
 			return `Source (${sourceCommit.substring(0, 7)}):\n${sourceContent}\n\nTarget (${targetCommit.substring(0, 7)}):\n${targetContent}`;
@@ -521,14 +661,10 @@ export class AzureDevOpsClient {
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/threads?api-version=7.0`;
 
 		// Get the latest iteration to set the proper context
-		const iterations = await this.getPullRequestIterations(
-			projectId,
-			repositoryId,
-			pullRequestId,
-		);
+		const iterations = await this.getPullRequestIterations(projectId, repositoryId, pullRequestId);
 		const latestIteration = iterations.length > 0 ? iterations.at(-1) : null;
 
-		const requestBody: any = {
+		const requestBody: AzDOThreadCreationRequest = {
 			comments: [
 				{
 					parentCommentId: 0,
@@ -586,12 +722,12 @@ export class AzureDevOpsClient {
 		});
 
 		// Map the response to our PRThread interface
-		const thread = response.data;
+		const thread = response.data as AzDOThread;
 		return {
 			id: thread.id,
 			publishedDate: new Date(thread.publishedDate),
 			lastUpdatedDate: new Date(thread.lastUpdatedDate),
-			comments: (thread.comments || []).map((comment: any) => ({
+			comments: (thread.comments || []).map((comment: AzDOComment) => ({
 				id: comment.id,
 				parentCommentId: comment.parentCommentId,
 				author: comment.author,
@@ -751,14 +887,14 @@ export class AzureDevOpsClient {
 			const headers = await this.getAuthHeaders();
 			// Azure DevOps Git Items API expects paths without leading slash
 			// Strip leading slash if present
-			const normalizedPath = path.startsWith('/') ? path.substring(1) : path;
+			const normalizedPath = path.startsWith("/") ? path.substring(1) : path;
 
 			// Encode each path segment separately to preserve forward slashes
 			// This handles paths with spaces like "LaunchPoint Core/Wiki/file.md"
 			const encodedPath = normalizedPath
-				.split('/')
-				.map(segment => encodeURIComponent(segment))
-				.join('/');
+				.split("/")
+				.map((segment) => encodeURIComponent(segment))
+				.join("/");
 
 			// Determine versionType based on version format
 			// If version looks like a SHA (40 hex chars), use commit, otherwise use branch
@@ -771,23 +907,19 @@ export class AzureDevOpsClient {
 			// Add includeContent=true to get the actual file content
 			const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/items?path=${encodedPath}&versionType=${versionType}&version=${versionParam}&includeContent=true&api-version=7.0`;
 
-			console.log('[AzureDevOpsClient] Fetching file:', {
+			logger.debug("AzureDevOpsClient: Fetching file:", {
 				originalPath: path,
 				encodedPath,
 				version,
 				versionType,
-				url
+				url,
 			});
 
 			const response = await this.axiosInstance.get(url, { headers });
 
 			// The API returns JSON with a 'content' field containing the file content
 			// The content has escaped newlines (\n) that need to be converted to actual newlines
-			if (
-				response.data &&
-				typeof response.data === "object" &&
-				"content" in response.data
-			) {
+			if (response.data && typeof response.data === "object" && "content" in response.data) {
 				// Extract the content field and replace escaped newlines with actual newlines
 				const content = response.data.content;
 
@@ -815,11 +947,11 @@ export class AzureDevOpsClient {
 			throw new Error(`Unexpected response format for file: ${path}`);
 		} catch (error) {
 			if (axios.isAxiosError(error)) {
-				console.error('[AzureDevOpsClient] Error fetching file:', {
+				logger.error("AzureDevOpsClient: Error fetching file:", {
 					path,
 					status: error.response?.status,
 					statusText: error.response?.statusText,
-					data: error.response?.data
+					data: error.response?.data,
 				});
 				if (error.response?.status === 404) {
 					throw new Error(`File not found: ${path}`);
@@ -851,18 +983,18 @@ export class AzureDevOpsClient {
 		path: string,
 		version: string,
 		resolveLfs: boolean = false,
-		downloadType: 'text' | 'binary' = 'text'
+		downloadType: "text" | "binary" = "text",
 	): Promise<string | Buffer> {
 		try {
 			const headers = await this.getAuthHeaders();
 			// Azure DevOps Git Items API expects paths without leading slash
-			const normalizedPath = path.startsWith('/') ? path.substring(1) : path;
+			const normalizedPath = path.startsWith("/") ? path.substring(1) : path;
 
 			// Encode each path segment separately to preserve forward slashes
 			const encodedPath = normalizedPath
-				.split('/')
-				.map(segment => encodeURIComponent(segment))
-				.join('/');
+				.split("/")
+				.map((segment) => encodeURIComponent(segment))
+				.join("/");
 
 			// Determine versionType based on version format
 			const versionType = /^[0-9a-f]{40}$/i.test(version) ? "commit" : "branch";
@@ -872,44 +1004,40 @@ export class AzureDevOpsClient {
 				path: encodedPath,
 				versionType: versionType,
 				version: version,
-				includeContent: 'true',
-				'api-version': '7.1'  // Upgraded from 7.0 for LFS support
+				includeContent: "true",
+				"api-version": "7.1", // Upgraded from 7.0 for LFS support
 			});
 
 			// Add resolveLfs parameter if requested
 			if (resolveLfs) {
-				params.append('resolveLfs', 'true');
+				params.append("resolveLfs", "true");
 			}
 
 			const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/items?${params}`;
 
-			console.log('[AzureDevOpsClient] Fetching file with LFS:', {
+			logger.debug("AzureDevOpsClient: Fetching file with LFS:", {
 				originalPath: path,
 				encodedPath,
 				version,
 				versionType,
 				resolveLfs,
-				downloadType
+				downloadType,
 			});
 
 			// Set response type based on download type
 			const response = await this.axiosInstance.get(url, {
 				headers,
-				responseType: downloadType === 'binary' ? 'arraybuffer' : 'json'
+				responseType: downloadType === "binary" ? "arraybuffer" : "json",
 			});
 
 			// Handle binary response
-			if (downloadType === 'binary') {
+			if (downloadType === "binary") {
 				// For binary downloads, Azure DevOps returns the raw binary data
 				return Buffer.from(response.data);
 			}
 
 			// Handle text response (same logic as getFileContent)
-			if (
-				response.data &&
-				typeof response.data === "object" &&
-				"content" in response.data
-			) {
+			if (response.data && typeof response.data === "object" && "content" in response.data) {
 				const content = response.data.content;
 
 				if (content && typeof content === "string") {
@@ -933,12 +1061,12 @@ export class AzureDevOpsClient {
 			throw new Error(`Unexpected response format for file: ${path}`);
 		} catch (error) {
 			if (axios.isAxiosError(error)) {
-				console.error('[AzureDevOpsClient] Error fetching file with LFS:', {
+				logger.error("AzureDevOpsClient: Error fetching file with LFS:", {
 					path,
 					resolveLfs,
 					status: error.response?.status,
 					statusText: error.response?.statusText,
-					data: error.response?.data
+					data: error.response?.data,
 				});
 				if (error.response?.status === 404) {
 					throw new Error(`File not found: ${path}`);
@@ -963,7 +1091,7 @@ export class AzureDevOpsClient {
 		pullRequestId: number,
 		reviewerId: string,
 		vote: number,
-	): Promise<any> {
+	): Promise<AzDOReviewer> {
 		const headers = await this.getAuthHeaders();
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/reviewers/${reviewerId}?api-version=7.0`;
 
@@ -1009,7 +1137,7 @@ export class AzureDevOpsClient {
 	 */
 	async getImageAsDataUri(imageUrl: string): Promise<string | undefined> {
 		if (!imageUrl) {
-			console.log('[AzureDevOpsClient] No image URL provided');
+			logger.debug("AzureDevOpsClient: No image URL provided");
 			return undefined;
 		}
 
@@ -1017,25 +1145,27 @@ export class AzureDevOpsClient {
 		const cacheKey = `image:${imageUrl}`;
 		const cached = this.cache.get(cacheKey);
 		if (cached && Date.now() - cached.timestamp < cached.ttl) {
-			console.log(`[AzureDevOpsClient] Using cached image for ${imageUrl}`);
-			return cached.data;
+			logger.debug(`AzureDevOpsClient: Using cached image for ${imageUrl}`);
+			return cached.data as string | undefined;
 		}
 
 		try {
-			console.log(`[AzureDevOpsClient] Fetching image from ${imageUrl}`);
+			logger.debug(`AzureDevOpsClient: Fetching image from ${imageUrl}`);
 			const headers = await this.getAuthHeaders();
 			const response = await this.axiosInstance.get(imageUrl, {
 				headers,
-				responseType: 'arraybuffer',
+				responseType: "arraybuffer",
 			});
 
 			// Convert to base64
 			const buffer = Buffer.from(response.data);
-			const base64 = buffer.toString('base64');
-			const contentType = response.headers['content-type'] || 'image/png';
+			const base64 = buffer.toString("base64");
+			const contentType = response.headers["content-type"] || "image/png";
 			const dataUri = `data:${contentType};base64,${base64}`;
 
-			console.log(`[AzureDevOpsClient] Successfully converted image to data URI (${base64.length} bytes)`);
+			console.log(
+				`[AzureDevOpsClient] Successfully converted image to data URI (${base64.length} bytes)`,
+			);
 
 			// Cache for 1 hour
 			this.cache.set(cacheKey, {
@@ -1046,7 +1176,7 @@ export class AzureDevOpsClient {
 
 			return dataUri;
 		} catch (error) {
-			console.error(`[AzureDevOpsClient] Failed to fetch image from ${imageUrl}:`, error);
+			logger.error(`AzureDevOpsClient: Failed to fetch image from ${imageUrl}:`, error);
 			return undefined;
 		}
 	}

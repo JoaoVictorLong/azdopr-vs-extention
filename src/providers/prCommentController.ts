@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
+import type { AzureDevOpsClient, PRThread } from "../services/azureDevOpsClient";
 import { PRContextManager } from "../services/prContextManager";
-import type {
-	AzureDevOpsClient,
-	PRThread,
-} from "../services/azureDevOpsClient";
-import { CommentThreadManager, type AzDOCommentThread } from "../types/commentThread";
-import { AzDOComment, TemporaryComment, type AuthorInfo } from "../types/comments";
+import { type AuthorInfo, type AzDOComment, TemporaryComment } from "../types/comments";
+import { type AzDOCommentThread, CommentThreadManager } from "../types/commentThread";
+import { Logger } from "../utils/logger";
+
+const logger = Logger.getInstance();
 
 /**
  * ============================================================================
@@ -47,7 +47,7 @@ export class PRCommentController {
 	private currentUserId?: string;
 
 	constructor(private readonly azureDevOpsClient: AzureDevOpsClient) {
-		console.log("[PRCommentController] Initializing NEW comment controller");
+		logger.info("PRCommentController: Initializing comment controller");
 
 		// Create the comment controller
 		this.commentController = vscode.comments.createCommentController(
@@ -76,22 +76,17 @@ export class PRCommentController {
 		try {
 			const currentUser = await this.azureDevOpsClient.getCurrentUser();
 			this.currentUserId = currentUser.id;
-			console.log(
-				`[PRCommentController] Initialized with user: ${currentUser.displayName}`,
-			);
+			logger.info(`PRCommentController: Initialized with user: ${currentUser.displayName}`);
 		} catch (error) {
-			console.warn(
-				"[PRCommentController] Failed to get current user:",
-				error,
-			);
+			logger.warn("PRCommentController: Failed to get current user", error);
 		}
 
 		// Load comments for the current editor if it's a PR diff
 		if (vscode.window.activeTextEditor) {
 			const doc = vscode.window.activeTextEditor.document;
 			if (doc.uri.scheme === "azdo-pr") {
-				console.log(
-					`[PRCommentController] Loading comments for active editor: ${doc.uri.toString()}`,
+				logger.debug(
+					`PRCommentController: Loading comments for active editor: ${doc.uri.toString()}`,
 				);
 				await this.loadCommentsForDocument(doc);
 			}
@@ -103,9 +98,7 @@ export class PRCommentController {
 	 */
 	private setupCommentingRangeProvider(): void {
 		this.commentController.commentingRangeProvider = {
-			provideCommentingRanges: (
-				document: vscode.TextDocument,
-			): vscode.Range[] | undefined => {
+			provideCommentingRanges: (document: vscode.TextDocument): vscode.Range[] | undefined => {
 				// Allow commenting on any line in PR diff documents
 				if (document.uri.scheme === "azdo-pr") {
 					const lineCount = document.lineCount;
@@ -158,9 +151,7 @@ export class PRCommentController {
 	 * Load and display comments for a document (with debouncing)
 	 * This is the main entry point called by event listeners
 	 */
-	public async loadCommentsForDocument(
-		document: vscode.TextDocument,
-	): Promise<void> {
+	public async loadCommentsForDocument(document: vscode.TextDocument): Promise<void> {
 		const uriString = document.uri.toString();
 
 		// Only process PR diff documents
@@ -168,9 +159,7 @@ export class PRCommentController {
 			return;
 		}
 
-		console.log(
-			`[PRCommentController] Load request for: ${document.uri.path}`,
-		);
+		logger.debug(`PRCommentController: Load request for: ${document.uri.path}`);
 
 		// Clear any existing debounce timer
 		if (this.debounceTimers.has(uriString)) {
@@ -195,9 +184,10 @@ export class PRCommentController {
 		const uriString = document.uri.toString();
 
 		// Check if already loading this document
-		if (this.loadingPromises.has(uriString)) {
-			console.log(`[PRCommentController] Already loading: ${document.uri.path}`);
-			return await this.loadingPromises.get(uriString)!;
+		const existingPromise = this.loadingPromises.get(uriString);
+		if (existingPromise) {
+			logger.debug(`PRCommentController: Already loading: ${document.uri.path}`);
+			return await existingPromise;
 		}
 
 		// Create loading promise
@@ -219,14 +209,12 @@ export class PRCommentController {
 		const fileContext = contextManager.getPRFileContext(document.uri);
 
 		if (!fileContext) {
-			console.log(
-				`[PRCommentController] No context for: ${document.uri.path}`,
-			);
+			logger.debug(`PRCommentController: No context for: ${document.uri.path}`);
 			return;
 		}
 
-		console.log(
-			`[PRCommentController] Loading comments for PR #${fileContext.pullRequest.pullRequestId}, file: ${fileContext.filePath}, side: ${fileContext.side}`,
+		logger.debug(
+			`PRCommentController: Loading comments for PR #${fileContext.pullRequest.pullRequestId}, file: ${fileContext.filePath}, side: ${fileContext.side}`,
 		);
 
 		try {
@@ -237,18 +225,13 @@ export class PRCommentController {
 				fileContext.pullRequest.pullRequestId,
 			);
 
-			console.log(
-				`[PRCommentController] Fetched ${threads.length} total threads`,
-			);
+			logger.debug(`PRCommentController: Fetched ${threads.length} total threads`);
 
 			// Filter threads for this file
-			const fileThreads = this.filterThreadsForFile(
-				threads,
-				fileContext.filePath,
-			);
+			const fileThreads = this.filterThreadsForFile(threads, fileContext.filePath);
 
-			console.log(
-				`[PRCommentController] Found ${fileThreads.length} threads for ${fileContext.filePath}`,
+			logger.debug(
+				`PRCommentController: Found ${fileThreads.length} threads for ${fileContext.filePath}`,
 			);
 
 			// Get organization URL for markdown processing
@@ -256,7 +239,7 @@ export class PRCommentController {
 			try {
 				organizationUrl = this.azureDevOpsClient.getOrganizationUrl();
 			} catch (error) {
-				console.warn("Organization URL not available:", error);
+				logger.warn("Organization URL not available", error);
 			}
 
 			// Sync threads (differential update - no flicker!)
@@ -278,11 +261,9 @@ export class PRCommentController {
 			// Fetch profile images for all comments asynchronously
 			await this.loadProfileImages(fileThreads);
 
-			console.log(
-				`[PRCommentController] Successfully synced ${fileThreads.length} threads`,
-			);
+			logger.info(`PRCommentController: Successfully synced ${fileThreads.length} threads`);
 		} catch (error) {
-			console.error("[PRCommentController] Failed to load comments:", error);
+			logger.error("PRCommentController: Failed to load comments", error);
 			vscode.window.showErrorMessage(
 				`Failed to load comments: ${error instanceof Error ? error.message : String(error)}`,
 			);
@@ -292,10 +273,7 @@ export class PRCommentController {
 	/**
 	 * Filter threads for a specific file
 	 */
-	private filterThreadsForFile(
-		threads: PRThread[],
-		filePath: string,
-	): PRThread[] {
+	private filterThreadsForFile(threads: PRThread[], filePath: string): PRThread[] {
 		const normalizedPath = this.normalizePath(filePath);
 
 		return threads.filter((thread) => {
@@ -312,10 +290,7 @@ export class PRCommentController {
 	 * Normalize file path for comparison
 	 */
 	private normalizePath(path: string): string {
-		return path
-			.replace(/^\/+/, "")
-			.replaceAll("\\", "/")
-			.toLowerCase();
+		return path.replace(/^\/+/, "").replaceAll("\\", "/").toLowerCase();
 	}
 
 	/**
@@ -327,9 +302,7 @@ export class PRCommentController {
 		for (const thread of threads) {
 			for (const comment of thread.comments) {
 				if (comment.author.imageUrl) {
-					imagePromises.push(
-						this.loadProfileImage(comment.author.imageUrl, comment.id),
-					);
+					imagePromises.push(this.loadProfileImage(comment.author.imageUrl, comment.id));
 				}
 			}
 		}
@@ -340,23 +313,16 @@ export class PRCommentController {
 	/**
 	 * Load a single profile image as data URI
 	 */
-	private async loadProfileImage(
-		imageUrl: string,
-		commentId: number,
-	): Promise<void> {
+	private async loadProfileImage(imageUrl: string, commentId: number): Promise<void> {
 		try {
-			const dataUri =
-				await this.azureDevOpsClient.getImageAsDataUri(imageUrl);
+			const dataUri = await this.azureDevOpsClient.getImageAsDataUri(imageUrl);
 			if (dataUri) {
 				// Find the comment and update its icon
 				// This will be handled by the comment objects themselves
-				console.log(`[PRCommentController] Loaded image for comment ${commentId}`);
+				logger.debug(`PRCommentController: Loaded image for comment ${commentId}`);
 			}
 		} catch (error) {
-			console.warn(
-				`[PRCommentController] Failed to load image for comment ${commentId}:`,
-				error,
-			);
+			logger.warn(`PRCommentController: Failed to load image for comment ${commentId}:`, error);
 		}
 	}
 
@@ -395,7 +361,7 @@ export class PRCommentController {
 					imageUrl: user.imageUrl,
 				};
 			} catch (error) {
-				console.error("Failed to get current user:", error);
+				logger.error("Failed to get current user", error);
 				vscode.window.showErrorMessage("Failed to get current user information");
 				return;
 			}
@@ -404,7 +370,7 @@ export class PRCommentController {
 			let organizationUrl: string | undefined;
 			try {
 				organizationUrl = this.azureDevOpsClient.getOrganizationUrl();
-			} catch (error) {
+			} catch (_error) {
 				// Ignore
 			}
 
@@ -426,16 +392,15 @@ export class PRCommentController {
 					}
 					const lineNumber = reply.thread.range.start.line + 1;
 
-					const createdThread =
-						await this.azureDevOpsClient.createPRThread(
-							pr.repository.project.id,
-							pr.repository.id,
-							pr.pullRequestId,
-							fileContext.filePath,
-							lineNumber,
-							commentText,
-							fileContext.side,
-						);
+					const createdThread = await this.azureDevOpsClient.createPRThread(
+						pr.repository.project.id,
+						pr.repository.id,
+						pr.pullRequestId,
+						fileContext.filePath,
+						lineNumber,
+						commentText,
+						fileContext.side,
+					);
 
 					// Update thread ID
 					azdoThread.threadId = createdThread.id;
@@ -453,11 +418,7 @@ export class PRCommentController {
 						this.currentUserId,
 					);
 
-					this.threadManager.replaceTemporaryComment(
-						azdoThread,
-						tempComment.tempId,
-						realComment,
-					);
+					this.threadManager.replaceTemporaryComment(azdoThread, tempComment.tempId, realComment);
 
 					vscode.window.showInformationMessage("Comment added successfully");
 				} else {
@@ -477,38 +438,26 @@ export class PRCommentController {
 						this.currentUserId,
 					);
 
-					this.threadManager.replaceTemporaryComment(
-						azdoThread,
-						tempComment.tempId,
-						realComment,
-					);
+					this.threadManager.replaceTemporaryComment(azdoThread, tempComment.tempId, realComment);
 
 					vscode.window.showInformationMessage("Reply added successfully");
 				}
 			} catch (error) {
 				// Remove temporary comment on error
-				this.threadManager.removeTemporaryComment(
-					azdoThread,
-					tempComment.tempId,
-				);
+				this.threadManager.removeTemporaryComment(azdoThread, tempComment.tempId);
 
 				const errorMessage =
-					error instanceof Error
-						? error.message
-						: `[Non-Error type thrown: ${typeof error}]`;
+					error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
 				vscode.window.showErrorMessage(`Failed to add comment: ${errorMessage}`);
-				console.error("Error adding comment:", error);
+				logger.error("Error adding comment", error);
 			}
 		} catch (error) {
 			const errorMessage =
-				error instanceof Error
-					? error.message
-					: `[Non-Error type thrown: ${typeof error}]`;
+				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
 			vscode.window.showErrorMessage(`Failed to add comment: ${errorMessage}`);
-			console.error("Error in handleCommentSubmit:", error);
+			logger.error("Error in handleCommentSubmit", error);
 		}
 	}
-
 
 	/**
 	 * Handle comment edit (in-place, no reload!)
@@ -535,7 +484,7 @@ export class PRCommentController {
 			}
 
 			// Find the thread containing this comment
-			const thread = comment["parent"] as AzDOCommentThread;
+			const thread = comment.getThread() as AzDOCommentThread;
 			if (!thread || !thread.threadId || !thread.prContext) {
 				throw new Error("Could not find comment thread");
 			}
@@ -565,11 +514,9 @@ export class PRCommentController {
 			vscode.window.showInformationMessage("Comment updated successfully");
 		} catch (error) {
 			const errorMessage =
-				error instanceof Error
-					? error.message
-					: `[Non-Error type thrown: ${typeof error}]`;
+				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
 			vscode.window.showErrorMessage(`Failed to edit comment: ${errorMessage}`);
-			console.error("Error editing comment:", error);
+			logger.error("Error editing comment", error);
 		}
 	}
 
@@ -590,7 +537,7 @@ export class PRCommentController {
 			}
 
 			// Find the thread
-			const thread = comment["parent"] as AzDOCommentThread;
+			const thread = comment.getThread() as AzDOCommentThread;
 			if (!thread || !thread.threadId || !thread.prContext) {
 				throw new Error("Could not find comment thread");
 			}
@@ -625,11 +572,9 @@ export class PRCommentController {
 			vscode.window.showInformationMessage("Comment deleted successfully");
 		} catch (error) {
 			const errorMessage =
-				error instanceof Error
-					? error.message
-					: `[Non-Error type thrown: ${typeof error}]`;
+				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
 			vscode.window.showErrorMessage(`Failed to delete comment: ${errorMessage}`);
-			console.error("Error deleting comment:", error);
+			logger.error("Error deleting comment", error);
 		}
 	}
 
@@ -667,20 +612,16 @@ export class PRCommentController {
 			vscode.window.showInformationMessage("Thread resolved successfully");
 		} catch (error) {
 			const errorMessage =
-				error instanceof Error
-					? error.message
-					: `[Non-Error type thrown: ${typeof error}]`;
+				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
 			vscode.window.showErrorMessage(`Failed to resolve thread: ${errorMessage}`);
-			console.error("Error resolving thread:", error);
+			logger.error("Error resolving thread", error);
 		}
 	}
 
 	/**
 	 * Handle thread unresolve
 	 */
-	private async handleUnresolveThread(
-		thread: vscode.CommentThread,
-	): Promise<void> {
+	private async handleUnresolveThread(thread: vscode.CommentThread): Promise<void> {
 		const azdoThread = thread as AzDOCommentThread;
 		if (!azdoThread.threadId || !azdoThread.prContext) {
 			vscode.window.showErrorMessage("Invalid thread");
@@ -711,13 +652,9 @@ export class PRCommentController {
 			vscode.window.showInformationMessage("Thread unresolved successfully");
 		} catch (error) {
 			const errorMessage =
-				error instanceof Error
-					? error.message
-					: `[Non-Error type thrown: ${typeof error}]`;
-			vscode.window.showErrorMessage(
-				`Failed to unresolve thread: ${errorMessage}`,
-			);
-			console.error("Error unresolving thread:", error);
+				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
+			vscode.window.showErrorMessage(`Failed to unresolve thread: ${errorMessage}`);
+			logger.error("Error unresolving thread", error);
 		}
 	}
 
@@ -732,7 +669,7 @@ export class PRCommentController {
 	 * Refresh all comments
 	 */
 	public async refresh(): Promise<void> {
-		console.log("[PRCommentController] Refreshing all comments");
+		logger.debug("PRCommentController: Refreshing all comments");
 
 		// Reload comments for all visible PR diff editors
 		for (const editor of vscode.window.visibleTextEditors) {
@@ -746,7 +683,7 @@ export class PRCommentController {
 	 * Dispose of resources
 	 */
 	public dispose(): void {
-		console.log("[PRCommentController] Disposing");
+		logger.debug("PRCommentController: Disposing");
 
 		// Clear all debounce timers
 		for (const timer of this.debounceTimers.values()) {

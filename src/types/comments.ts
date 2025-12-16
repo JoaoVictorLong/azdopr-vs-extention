@@ -1,9 +1,6 @@
 import * as vscode from "vscode";
 import type { PRComment } from "../services/azureDevOpsClient";
-import {
-	cleanCommentContent,
-	formatTimeAgo,
-} from "../utils/commentFormatter";
+import { cleanCommentContent, formatTimeAgo } from "../utils/commentFormatter";
 import { processCommentContent } from "../utils/markdownProcessor";
 
 /**
@@ -38,9 +35,7 @@ export abstract class CommentBase implements vscode.Comment {
 	) {
 		this.author = {
 			name: authorInfo.displayName,
-			iconPath: authorInfo.imageUrl
-				? vscode.Uri.parse(authorInfo.imageUrl)
-				: undefined,
+			iconPath: authorInfo.imageUrl ? vscode.Uri.parse(authorInfo.imageUrl) : undefined,
 		};
 		this._body = this.formatBody(rawContent);
 	}
@@ -93,11 +88,7 @@ export abstract class CommentBase implements vscode.Comment {
 	/**
 	 * Update context values based on permissions
 	 */
-	protected updateContext(
-		canEdit: boolean,
-		canDelete: boolean,
-		hasSuggestion?: boolean,
-	): void {
+	protected updateContext(canEdit: boolean, canDelete: boolean, hasSuggestion?: boolean): void {
 		const contextValues: string[] = [];
 
 		if (canEdit) {
@@ -110,8 +101,7 @@ export abstract class CommentBase implements vscode.Comment {
 			contextValues.push("hasSuggestion");
 		}
 
-		this._contextValue =
-			contextValues.length > 0 ? contextValues.join(",") : undefined;
+		this._contextValue = contextValues.length > 0 ? contextValues.join(",") : undefined;
 	}
 
 	/**
@@ -197,11 +187,7 @@ export class TemporaryComment extends CommentBase {
 		markdown.supportThemeIcons = true;
 
 		markdown.appendMarkdown("_Pending..._\n\n");
-		markdown.appendMarkdown(
-			typeof this._body === "string"
-				? this._body
-				: this._body.value,
-		);
+		markdown.appendMarkdown(typeof this._body === "string" ? this._body : this._body.value);
 
 		return markdown;
 	}
@@ -244,8 +230,7 @@ export class AzDOComment extends CommentBase {
 		this.timestamp = this.publishedDate;
 
 		// Check if edited
-		this.wasEdited =
-			this.lastUpdatedDate.getTime() !== this.publishedDate.getTime();
+		this.wasEdited = this.lastUpdatedDate.getTime() !== this.publishedDate.getTime();
 
 		// Update permissions
 		this.updatePermissions();
@@ -260,11 +245,9 @@ export class AzDOComment extends CommentBase {
 	 */
 	public update(newServerComment: PRComment): boolean {
 		// Check if content or metadata changed
-		const contentChanged =
-			this.serverComment.content !== newServerComment.content;
+		const contentChanged = this.serverComment.content !== newServerComment.content;
 		const editTimeChanged =
-			this.serverComment.lastUpdatedDate.getTime() !==
-			newServerComment.lastUpdatedDate.getTime();
+			this.serverComment.lastUpdatedDate.getTime() !== newServerComment.lastUpdatedDate.getTime();
 
 		if (!contentChanged && !editTimeChanged) {
 			return false; // No changes
@@ -273,8 +256,7 @@ export class AzDOComment extends CommentBase {
 		// Update stored comment
 		this.serverComment = newServerComment;
 		this.lastUpdatedDate = newServerComment.lastUpdatedDate;
-		this.wasEdited =
-			this.lastUpdatedDate.getTime() !== this.publishedDate.getTime();
+		this.wasEdited = this.lastUpdatedDate.getTime() !== this.publishedDate.getTime();
 
 		// Update body if content changed
 		if (contentChanged) {
@@ -305,9 +287,7 @@ export class AzDOComment extends CommentBase {
 	 * Update permissions based on current user
 	 */
 	private updatePermissions(): void {
-		const canEdit =
-			!!this.currentUserId &&
-			this.serverComment.author.id === this.currentUserId;
+		const canEdit = !!this.currentUserId && this.serverComment.author.id === this.currentUserId;
 		const canDelete = canEdit;
 		const hasSuggestion = this.hasSuggestion();
 
@@ -348,5 +328,12 @@ export class AzDOComment extends CommentBase {
 		this.wasEdited = true;
 		this._body = this.formatBody(newContent);
 		this.updateLabel();
+	}
+
+	/**
+	 * Get the parent thread (public accessor for protected property)
+	 */
+	public getThread(): vscode.CommentThread {
+		return this.parent;
 	}
 }

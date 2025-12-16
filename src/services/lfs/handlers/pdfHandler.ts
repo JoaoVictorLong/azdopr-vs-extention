@@ -5,11 +5,14 @@
  * It creates temporary files on disk since VS Code's PDF viewer requires file:// URIs.
  */
 
-import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import type { LfsFileHandler, PRContext } from '../fileTypeHandlers';
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as vscode from "vscode";
+import { Logger } from "../../../utils/logger";
+import type { LfsFileHandler, PRContext } from "../fileTypeHandlers";
+
+const logger = Logger.getInstance();
 
 /**
  * Handler for PDF files
@@ -27,176 +30,172 @@ import type { LfsFileHandler, PRContext } from '../fileTypeHandlers';
  * ```
  */
 export class PdfFileHandler implements LfsFileHandler {
-    private readonly tempDir: string;
-    private readonly createdFiles: Set<string> = new Set();
+	private readonly tempDir: string;
+	private readonly createdFiles: Set<string> = new Set();
 
-    constructor() {
-        // Create temp directory for PDF files
-        this.tempDir = path.join(os.tmpdir(), 'azdopr-lfs-pdfs');
+	constructor() {
+		// Create temp directory for PDF files
+		this.tempDir = path.join(os.tmpdir(), "azdopr-lfs-pdfs");
 
-        try {
-            if (!fs.existsSync(this.tempDir)) {
-                fs.mkdirSync(this.tempDir, { recursive: true });
-                console.log('[PdfFileHandler] Created temp directory:', this.tempDir);
-            }
-        } catch (error) {
-            console.error('[PdfFileHandler] Failed to create temp directory:', error);
-            throw new Error(`Failed to create temp directory for PDFs: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
+		try {
+			if (!fs.existsSync(this.tempDir)) {
+				fs.mkdirSync(this.tempDir, { recursive: true });
+				logger.debug("[PdfFileHandler] Created temp directory:", this.tempDir);
+			}
+		} catch (error) {
+			logger.error("[PdfFileHandler] Failed to create temp directory:", error);
+			throw new Error(
+				`Failed to create temp directory for PDFs: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
 
-    /**
-     * Check if this handler can handle the given file
-     * @param filePath The file path to check
-     * @returns true if the file has a .pdf extension
-     */
-    canHandle(filePath: string): boolean {
-        return filePath.toLowerCase().endsWith('.pdf');
-    }
+	/**
+	 * Check if this handler can handle the given file
+	 * @param filePath The file path to check
+	 * @returns true if the file has a .pdf extension
+	 */
+	canHandle(filePath: string): boolean {
+		return filePath.toLowerCase().endsWith(".pdf");
+	}
 
-    /**
-     * Display a PDF file in VS Code
-     *
-     * This method:
-     * 1. Validates the file content
-     * 2. Creates a unique temp filename with PR context
-     * 3. Writes the Buffer to the temp file
-     * 4. Opens the file with VS Code's PDF viewer
-     * 5. Tracks the file for cleanup
-     *
-     * @param fileContent The PDF file content as a Buffer
-     * @param filePath The original file path (for filename extraction)
-     * @param prContext Context about the PR
-     * @throws Error if display fails
-     */
-    async displayFile(
-        fileContent: Buffer,
-        filePath: string,
-        prContext: PRContext
-    ): Promise<void> {
-        const fileName = path.basename(filePath);
-        const prId = prContext.pullRequestId;
+	/**
+	 * Display a PDF file in VS Code
+	 *
+	 * This method:
+	 * 1. Validates the file content
+	 * 2. Creates a unique temp filename with PR context
+	 * 3. Writes the Buffer to the temp file
+	 * 4. Opens the file with VS Code's PDF viewer
+	 * 5. Tracks the file for cleanup
+	 *
+	 * @param fileContent The PDF file content as a Buffer
+	 * @param filePath The original file path (for filename extraction)
+	 * @param prContext Context about the PR
+	 * @throws Error if display fails
+	 */
+	async displayFile(fileContent: Buffer, filePath: string, prContext: PRContext): Promise<void> {
+		const fileName = path.basename(filePath);
+		const prId = prContext.pullRequestId;
 
-        console.log('[PdfFileHandler] Displaying PDF:', {
-            fileName,
-            prId,
-            size: fileContent.length
-        });
+		logger.debug("[PdfFileHandler] Displaying PDF:", {
+			fileName,
+			prId,
+			size: fileContent.length,
+		});
 
-        // Validate input
-        if (!fileContent || fileContent.length === 0) {
-            throw new Error('PDF file content is empty');
-        }
+		// Validate input
+		if (!fileContent || fileContent.length === 0) {
+			throw new Error("PDF file content is empty");
+		}
 
-        try {
-            // Create temp file with PR context in filename for uniqueness
-            // Format: pr{prId}_{timestamp}_{fileName}
-            const timestamp = Date.now();
-            const tempFileName = `pr${prId}_${timestamp}_${fileName}`;
-            const tempFilePath = path.join(this.tempDir, tempFileName);
+		try {
+			// Create temp file with PR context in filename for uniqueness
+			// Format: pr{prId}_{timestamp}_{fileName}
+			const timestamp = Date.now();
+			const tempFileName = `pr${prId}_${timestamp}_${fileName}`;
+			const tempFilePath = path.join(this.tempDir, tempFileName);
 
-            // Write buffer to temp file
-            fs.writeFileSync(tempFilePath, fileContent);
-            this.createdFiles.add(tempFilePath);
+			// Write buffer to temp file
+			fs.writeFileSync(tempFilePath, fileContent);
+			this.createdFiles.add(tempFilePath);
 
-            console.log('[PdfFileHandler] Created temp file:', tempFilePath);
+			logger.debug("[PdfFileHandler] Created temp file:", tempFilePath);
 
-            // Open with VS Code's built-in PDF viewer
-            const uri = vscode.Uri.file(tempFilePath);
+			// Open with VS Code's built-in PDF viewer
+			const uri = vscode.Uri.file(tempFilePath);
 
-            // Open in a new editor beside the current one
-            await vscode.commands.executeCommand('vscode.open', uri, {
-                preview: true,
-                viewColumn: vscode.ViewColumn.Beside
-            });
+			// Open in a new editor beside the current one
+			await vscode.commands.executeCommand("vscode.open", uri, {
+				preview: true,
+				viewColumn: vscode.ViewColumn.Beside,
+			});
 
-            // Show success message with PR context
-            vscode.window.showInformationMessage(
-                `Opened PDF: ${fileName} from PR #${prId}`
-            );
+			// Show success message with PR context
+			vscode.window.showInformationMessage(`Opened PDF: ${fileName} from PR #${prId}`);
 
-            console.log('[PdfFileHandler] Successfully opened PDF:', fileName);
-        } catch (error) {
-            console.error('[PdfFileHandler] Failed to display PDF:', error);
+			logger.debug("[PdfFileHandler] Successfully opened PDF:", fileName);
+		} catch (error) {
+			logger.error("[PdfFileHandler] Failed to display PDF:", error);
 
-            // Clean up the temp file if it was created but failed to open
-            throw new Error(
-                `Failed to display PDF file: ${error instanceof Error ? error.message : String(error)}`
-            );
-        }
-    }
+			// Clean up the temp file if it was created but failed to open
+			throw new Error(
+				`Failed to display PDF file: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
 
-    /**
-     * Get the MIME type for PDF files
-     * @returns The PDF MIME type
-     */
-    getMimeType(): string {
-        return 'application/pdf';
-    }
+	/**
+	 * Get the MIME type for PDF files
+	 * @returns The PDF MIME type
+	 */
+	getMimeType(): string {
+		return "application/pdf";
+	}
 
-    /**
-     * Cleanup temp files created by this handler
-     *
-     * This method is called when:
-     * - The extension is deactivated
-     * - The file handler registry is cleared
-     *
-     * It attempts to delete all temp PDF files created during this session.
-     * Errors are logged but not thrown to prevent disrupting extension cleanup.
-     */
-    dispose(): void {
-        console.log('[PdfFileHandler] Disposing handler, cleaning up temp files...');
+	/**
+	 * Cleanup temp files created by this handler
+	 *
+	 * This method is called when:
+	 * - The extension is deactivated
+	 * - The file handler registry is cleared
+	 *
+	 * It attempts to delete all temp PDF files created during this session.
+	 * Errors are logged but not thrown to prevent disrupting extension cleanup.
+	 */
+	dispose(): void {
+		logger.debug("[PdfFileHandler] Disposing handler, cleaning up temp files...");
 
-        let deletedCount = 0;
-        let errorCount = 0;
+		let deletedCount = 0;
+		let errorCount = 0;
 
-        // Delete all tracked temp files
-        for (const filePath of this.createdFiles) {
-            try {
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                    deletedCount++;
-                }
-            } catch (error) {
-                console.warn('[PdfFileHandler] Failed to delete temp file:', filePath, error);
-                errorCount++;
-            }
-        }
+		// Delete all tracked temp files
+		for (const filePath of this.createdFiles) {
+			try {
+				if (fs.existsSync(filePath)) {
+					fs.unlinkSync(filePath);
+					deletedCount++;
+				}
+			} catch (error) {
+				console.warn("[PdfFileHandler] Failed to delete temp file:", filePath, error);
+				errorCount++;
+			}
+		}
 
-        this.createdFiles.clear();
+		this.createdFiles.clear();
 
-        // Optionally clean up the temp directory if it's empty
-        try {
-            if (fs.existsSync(this.tempDir)) {
-                const files = fs.readdirSync(this.tempDir);
-                if (files.length === 0) {
-                    fs.rmdirSync(this.tempDir);
-                    console.log('[PdfFileHandler] Removed empty temp directory');
-                }
-            }
-        } catch (error) {
-            console.warn('[PdfFileHandler] Failed to remove temp directory:', error);
-        }
+		// Optionally clean up the temp directory if it's empty
+		try {
+			if (fs.existsSync(this.tempDir)) {
+				const files = fs.readdirSync(this.tempDir);
+				if (files.length === 0) {
+					fs.rmdirSync(this.tempDir);
+					logger.debug("[PdfFileHandler] Removed empty temp directory");
+				}
+			}
+		} catch (error) {
+			console.warn("[PdfFileHandler] Failed to remove temp directory:", error);
+		}
 
-        console.log('[PdfFileHandler] Cleanup complete:', {
-            deleted: deletedCount,
-            errors: errorCount
-        });
-    }
+		logger.debug("[PdfFileHandler] Cleanup complete:", {
+			deleted: deletedCount,
+			errors: errorCount,
+		});
+	}
 
-    /**
-     * Get the temp directory path (for testing/debugging)
-     * @returns The temp directory path
-     */
-    getTempDirectory(): string {
-        return this.tempDir;
-    }
+	/**
+	 * Get the temp directory path (for testing/debugging)
+	 * @returns The temp directory path
+	 */
+	getTempDirectory(): string {
+		return this.tempDir;
+	}
 
-    /**
-     * Get count of temp files created (for testing/debugging)
-     * @returns Number of temp files tracked
-     */
-    getTempFileCount(): number {
-        return this.createdFiles.size;
-    }
+	/**
+	 * Get count of temp files created (for testing/debugging)
+	 * @returns Number of temp files tracked
+	 */
+	getTempFileCount(): number {
+		return this.createdFiles.size;
+	}
 }

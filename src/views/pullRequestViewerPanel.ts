@@ -1,313 +1,316 @@
 import * as vscode from "vscode";
 import type {
-    AzureDevOpsClient,
-    PullRequest,
-    PRFileChange,
-    PRThread,
+	AzureDevOpsClient,
+	PRFileChange,
+	PRIteration,
+	PRThread,
+	PullRequest,
 } from "../services/azureDevOpsClient";
-import {
-    PRContextManager,
-    type PRFileContext,
-} from "../services/prContextManager";
-import { PRCacheService, type PRIteration } from "../services/prCache";
-import {
-    formatTimeAgo,
-    getThreadStatusLabel,
-    cleanCommentContent,
-} from "../utils/commentFormatter";
-import { LfsService } from "../services/lfs/lfsService";
 import { FileHandlerRegistry, type PRContext } from "../services/lfs/fileTypeHandlers";
 import { PdfFileHandler } from "../services/lfs/handlers/pdfHandler";
+import { LfsService } from "../services/lfs/lfsService";
+import { PRCacheService } from "../services/prCache";
+import { PRContextManager, type PRFileContext } from "../services/prContextManager";
+import {
+	cleanCommentContent,
+	formatTimeAgo,
+	getThreadStatusLabel,
+} from "../utils/commentFormatter";
+import { Logger } from "../utils/logger";
+
+const logger = Logger.getInstance();
 
 export class PullRequestViewerPanel {
-    private static _currentPanel: PullRequestViewerPanel | undefined;
-    private static _contentProviderRegistered: boolean = false;
-    private static readonly _virtualFileCache: Map<
-        string,
-        { content: string; timestamp: number; prId: number }
-    > = new Map();
-    private static _markedPromise: Promise<any> | undefined;
-    private static _lfsService: LfsService | undefined;
-    private static _fileHandlerRegistry: FileHandlerRegistry | undefined;
+	private static _currentPanel: PullRequestViewerPanel | undefined;
+	private static _contentProviderRegistered: boolean = false;
+	private static readonly _virtualFileCache: Map<
+		string,
+		{ content: string; timestamp: number; prId: number }
+	> = new Map();
+	// biome-ignore lint/suspicious/noExplicitAny: marked library is ESM, using any for dynamic import
+	private static _markedPromise: Promise<any> | undefined;
+	private static _lfsService: LfsService | undefined;
+	private static _fileHandlerRegistry: FileHandlerRegistry | undefined;
 
-    public static get currentPanel(): PullRequestViewerPanel | undefined {
-        return PullRequestViewerPanel._currentPanel;
-    }
+	public static get currentPanel(): PullRequestViewerPanel | undefined {
+		return PullRequestViewerPanel._currentPanel;
+	}
 
-    private static async getMarked(): Promise<any> {
-        PullRequestViewerPanel._markedPromise ??= import("marked");
-        return PullRequestViewerPanel._markedPromise;
-    }
+	// biome-ignore lint/suspicious/noExplicitAny: marked library is ESM, using any for dynamic import
+	private static async getMarked(): Promise<any> {
+		PullRequestViewerPanel._markedPromise ??= import("marked");
+		return PullRequestViewerPanel._markedPromise;
+	}
 
-    private readonly _panel: vscode.WebviewPanel;
-    private readonly _disposables: vscode.Disposable[] = [];
+	private readonly _panel: vscode.WebviewPanel;
+	private readonly _disposables: vscode.Disposable[] = [];
 
-    private constructor(
-        panel: vscode.WebviewPanel,
-        private readonly azureDevOpsClient: AzureDevOpsClient,
-        private pullRequest: PullRequest,
-    ) {
-        this._panel = panel;
+	private constructor(
+		panel: vscode.WebviewPanel,
+		private readonly azureDevOpsClient: AzureDevOpsClient,
+		private pullRequest: PullRequest,
+	) {
+		this._panel = panel;
 
-        // Set the current PR context
-        PRContextManager.getInstance().setCurrentPR(pullRequest);
+		// Set the current PR context
+		PRContextManager.getInstance().setCurrentPR(pullRequest);
 
-        // Set the webview's initial html content (synchronous loading state)
-        this._panel.webview.html = this._getLoadingHtml();
+		// Set the webview's initial html content (synchronous loading state)
+		this._panel.webview.html = this._getLoadingHtml();
 
-        // Listen for when the panel is disposed
-        this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+		// Listen for when the panel is disposed
+		this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
-        // Handle messages from the webview
-        this._panel.webview.onDidReceiveMessage(
-            async (message) => {
-                console.log("Received message from webview:", message);
-                switch (message.command) {
-                    case "openFile":
-                        console.log(
-                            "Opening file from webview:",
-                            message.path,
-                            "changeType:",
-                            message.changeType,
-                            "originalPath:",
-                            message.originalPath,
-                        );
-                        await this._openFileDiff(message.path, message.changeType, message.originalPath);
-                        break;
-                    case "openExternal":
-                        vscode.env.openExternal(vscode.Uri.parse(message.url));
-                        break;
-                    case "submitReview":
-                        await this._handleReviewSubmission(message.vote);
-                        break;
-                    case "refresh":
-                        console.log("Refresh requested from webview");
-                        await this.refreshWithFreshData();
-                        break;
-                    default:
-                        console.log("Unknown command:", message.command);
-                }
-            },
-            null,
-            this._disposables,
-        );
-    }
+		// Handle messages from the webview
+		this._panel.webview.onDidReceiveMessage(
+			async (message) => {
+				logger.debug("Received message from webview:", message);
+				switch (message.command) {
+					case "openFile":
+						logger.debug(
+							`Opening file from webview: ${message.path} changeType: ${message.changeType} originalPath: ${message.originalPath}`,
+						);
+						await this._openFileDiff(message.path, message.changeType, message.originalPath);
+						break;
+					case "openExternal":
+						vscode.env.openExternal(vscode.Uri.parse(message.url));
+						break;
+					case "submitReview":
+						await this._handleReviewSubmission(message.vote);
+						break;
+					case "refresh":
+						logger.debug("Refresh requested from webview");
+						await this.refreshWithFreshData();
+						break;
+					default:
+						logger.debug("Unknown command:", message.command);
+				}
+			},
+			null,
+			this._disposables,
+		);
+	}
 
-    public static async createOrShow(
-        extensionUri: vscode.Uri,
-        azureDevOpsClient: AzureDevOpsClient,
-        pullRequest: PullRequest,
-    ) {
-        const column = vscode.window.activeTextEditor
-            ? vscode.window.activeTextEditor.viewColumn
-            : undefined;
+	public static async createOrShow(
+		extensionUri: vscode.Uri,
+		azureDevOpsClient: AzureDevOpsClient,
+		pullRequest: PullRequest,
+	) {
+		const column = vscode.window.activeTextEditor
+			? vscode.window.activeTextEditor.viewColumn
+			: undefined;
 
-        // If we already have a panel, show it
-        if (PullRequestViewerPanel.currentPanel) {
-            PullRequestViewerPanel.currentPanel._panel.reveal(column);
-            // Update with new PR data
-            PullRequestViewerPanel.currentPanel.pullRequest = pullRequest;
-            await PullRequestViewerPanel.currentPanel._update();
-            return;
-        }
+		// If we already have a panel, show it
+		if (PullRequestViewerPanel.currentPanel) {
+			PullRequestViewerPanel.currentPanel._panel.reveal(column);
+			// Update with new PR data
+			PullRequestViewerPanel.currentPanel.pullRequest = pullRequest;
+			await PullRequestViewerPanel.currentPanel._update();
+			return;
+		}
 
-        // Otherwise, create a new panel
-        const panel = vscode.window.createWebviewPanel(
-            "azureDevOpsPRViewer",
-            `PR #${pullRequest.pullRequestId}: ${pullRequest.title}`,
-            column || vscode.ViewColumn.One,
-            {
-                enableScripts: true,
-                retainContextWhenHidden: true,
-                localResourceRoots: [extensionUri],
-            },
-        );
+		// Otherwise, create a new panel
+		const panel = vscode.window.createWebviewPanel(
+			"azureDevOpsPRViewer",
+			`PR #${pullRequest.pullRequestId}: ${pullRequest.title}`,
+			column || vscode.ViewColumn.One,
+			{
+				enableScripts: true,
+				retainContextWhenHidden: true,
+				localResourceRoots: [extensionUri],
+			},
+		);
 
-        const instance = new PullRequestViewerPanel(
-            panel,
-            azureDevOpsClient,
-            pullRequest,
-        );
-        PullRequestViewerPanel._currentPanel = instance;
+		const instance = new PullRequestViewerPanel(panel, azureDevOpsClient, pullRequest);
+		PullRequestViewerPanel._currentPanel = instance;
 
-        // Initialize the panel content asynchronously
-        await instance._update();
-    }
+		// Initialize the panel content asynchronously
+		await instance._update();
+	}
 
-    /**
-     * Clean up virtual file cache
-     * Removes old entries and entries for a specific PR
-     */
-    private static cleanupCache(prId?: number): void {
-        const now = Date.now();
-        const maxAge = 30 * 60 * 1000; // 30 minutes
+	/**
+	 * Clean up virtual file cache
+	 * Removes old entries and entries for a specific PR
+	 */
+	private static cleanupCache(prId?: number): void {
+		const now = Date.now();
+		const maxAge = 30 * 60 * 1000; // 30 minutes
 
-        const keysToRemove: string[] = [];
-        for (const [key, value] of PullRequestViewerPanel._virtualFileCache) {
-            // Remove if it's for the specified PR
-            if (prId !== undefined && value.prId === prId) {
-                keysToRemove.push(key);
-            }
-            // Remove if older than max age
-            else if (now - value.timestamp > maxAge) {
-                keysToRemove.push(key);
-            }
-        }
+		const keysToRemove: string[] = [];
+		for (const [key, value] of PullRequestViewerPanel._virtualFileCache) {
+			// Remove if it's for the specified PR
+			if (prId !== undefined && value.prId === prId) {
+				keysToRemove.push(key);
+			}
+			// Remove if older than max age
+			else if (now - value.timestamp > maxAge) {
+				keysToRemove.push(key);
+			}
+		}
 
-        for (const key of keysToRemove) {
-            PullRequestViewerPanel._virtualFileCache.delete(key);
-        }
+		for (const key of keysToRemove) {
+			PullRequestViewerPanel._virtualFileCache.delete(key);
+		}
 
-        if (keysToRemove.length > 0) {
-            console.log(
-                `[PullRequestViewerPanel] Cleaned up ${keysToRemove.length} cached file(s)`,
-            );
-        }
-    }
+		if (keysToRemove.length > 0) {
+			logger.debug(`PullRequestViewerPanel: Cleaned up ${keysToRemove.length} cached file(s)`);
+		}
+	}
 
-    public dispose() {
-        // Clean up cache for this PR
-        if (this.pullRequest) {
-            PullRequestViewerPanel.cleanupCache(this.pullRequest.pullRequestId);
-        }
+	public dispose() {
+		// Clean up cache for this PR
+		if (this.pullRequest) {
+			PullRequestViewerPanel.cleanupCache(this.pullRequest.pullRequestId);
+		}
 
-        PullRequestViewerPanel._currentPanel = undefined;
+		PullRequestViewerPanel._currentPanel = undefined;
 
-        this._panel.dispose();
+		this._panel.dispose();
 
-        while (this._disposables.length) {
-            const disposable = this._disposables.pop();
-            if (disposable) {
-                disposable.dispose();
-            }
-        }
-    }
+		while (this._disposables.length) {
+			const disposable = this._disposables.pop();
+			if (disposable) {
+				disposable.dispose();
+			}
+		}
+	}
 
-    /**
-     * Invalidate the cache for the current PR
-     * This forces a fresh fetch on the next update
-     */
-    public invalidateCache(): void {
-        const cache = PRCacheService.getInstance();
-        cache.invalidate(
-            this.pullRequest.repository.project.id,
-            this.pullRequest.repository.id,
-            this.pullRequest.pullRequestId,
-        );
-    }
+	/**
+	 * Invalidate the cache for the current PR
+	 * This forces a fresh fetch on the next update
+	 */
+	public invalidateCache(): void {
+		const cache = PRCacheService.getInstance();
+		cache.invalidate(
+			this.pullRequest.repository.project.id,
+			this.pullRequest.repository.id,
+			this.pullRequest.pullRequestId,
+		);
+	}
 
-    /**
-     * Refresh the PR view with fresh data from the API
-     */
-    public async refreshWithFreshData(): Promise<void> {
-        this.invalidateCache();
-        await this._update();
-    }
+	/**
+	 * Refresh the PR view with fresh data from the API
+	 */
+	public async refreshWithFreshData(): Promise<void> {
+		this.invalidateCache();
+		await this._update();
+	}
 
-    private async _update() {
-        const webview = this._panel.webview;
-        this._panel.title = `PR #${this.pullRequest.pullRequestId}: ${this.pullRequest.title}`;
+	private async _update() {
+		const webview = this._panel.webview;
+		this._panel.title = `PR #${this.pullRequest.pullRequestId}: ${this.pullRequest.title}`;
 
-        try {
-            // Validate required PR properties
-            if (!this.pullRequest.repository?.project) {
-                throw new Error(
-                    "Pull request is missing required repository or project information",
-                );
-            }
+		try {
+			// Validate required PR properties
+			if (!this.pullRequest.repository?.project) {
+				throw new Error("Pull request is missing required repository or project information");
+			}
 
-            webview.html = this._getLoadingHtml();
+			webview.html = this._getLoadingHtml();
 
-            const projectId = this.pullRequest.repository.project.id;
-            const repositoryId = this.pullRequest.repository.id;
-            const pullRequestId = this.pullRequest.pullRequestId;
+			const projectId = this.pullRequest.repository.project.id;
+			const repositoryId = this.pullRequest.repository.id;
+			const pullRequestId = this.pullRequest.pullRequestId;
 
-            // Get cache service
-            const cache = PRCacheService.getInstance();
+			// Get cache service
+			const cache = PRCacheService.getInstance();
 
-            // Try to get cached data first
-            const cachedData = cache.get(projectId, repositoryId, pullRequestId);
+			// Try to get cached data first
+			const cachedData = cache.get(projectId, repositoryId, pullRequestId);
 
-            let fullPRDetails: PullRequest;
-            let iterations: PRIteration[];
-            let fileChanges: PRFileChange[];
-            let threads: PRThread[];
-            let cacheInfo: { isCached: boolean; ageInSeconds?: number };
+			let fullPRDetails: PullRequest;
+			let iterations: PRIteration[];
+			let fileChanges: PRFileChange[];
+			let threads: PRThread[];
+			let cacheInfo: { isCached: boolean; ageInSeconds?: number };
 
-            if (cachedData) {
-                // Use cached data
-                console.log(`[PRViewerPanel] Using cached data for PR #${pullRequestId}`);
-                fullPRDetails = cachedData.fullDetails;
-                // iterations not needed here - only used when fetching fresh file changes
-                fileChanges = cachedData.fileChanges;
-                threads = cachedData.threads;
-                const ageMs = Date.now() - cachedData.timestamp;
-                cacheInfo = { isCached: true, ageInSeconds: Math.floor(ageMs / 1000) };
-            } else {
-                // Fetch fresh data from API
-                console.log(`[PRViewerPanel] Fetching fresh data for PR #${pullRequestId}`);
+			if (cachedData) {
+				// Use cached data
+				logger.debug(`PRViewerPanel: Using cached data for PR #${pullRequestId}`);
+				fullPRDetails = cachedData.fullDetails;
+				// iterations not needed here - only used when fetching fresh file changes
+				fileChanges = cachedData.fileChanges;
+				threads = cachedData.threads;
+				const ageMs = Date.now() - cachedData.timestamp;
+				cacheInfo = { isCached: true, ageInSeconds: Math.floor(ageMs / 1000) };
+			} else {
+				// Fetch fresh data from API
+				logger.debug(`PRViewerPanel: Fetching fresh data for PR #${pullRequestId}`);
 
-                // Fetch full PR details to get complete description (list API truncates it)
-                fullPRDetails = await this.azureDevOpsClient.getPullRequestDetails(
-                    projectId,
-                    repositoryId,
-                    pullRequestId,
-                );
+				// Fetch full PR details to get complete description (list API truncates it)
+				fullPRDetails = await this.azureDevOpsClient.getPullRequestDetails(
+					projectId,
+					repositoryId,
+					pullRequestId,
+				);
 
-                // Fetch iterations
-                iterations = await this.azureDevOpsClient.getPullRequestIterations(
-                    projectId,
-                    repositoryId,
-                    pullRequestId,
-                );
+				// Fetch iterations
+				iterations = await this.azureDevOpsClient.getPullRequestIterations(
+					projectId,
+					repositoryId,
+					pullRequestId,
+				);
 
-                // Get file changes from the latest iteration
-                fileChanges = [];
-                if (iterations.length > 0) {
-                    const latestIteration = iterations.at(-1);
-                    if (latestIteration) {
-                        fileChanges =
-                            await this.azureDevOpsClient.getPullRequestIterationChanges(
-                                projectId,
-                                repositoryId,
-                                pullRequestId,
-                                latestIteration.id,
-                            );
-                    }
-                }
+				// Get file changes from the latest iteration
+				fileChanges = [];
+				if (iterations.length > 0) {
+					const latestIteration = iterations.at(-1);
+					if (latestIteration) {
+						fileChanges = await this.azureDevOpsClient.getPullRequestIterationChanges(
+							projectId,
+							repositoryId,
+							pullRequestId,
+							latestIteration.id,
+						);
+					}
+				}
 
-                // Fetch PR threads (comments)
-                threads = await this.azureDevOpsClient.getPullRequestThreads(
-                    projectId,
-                    repositoryId,
-                    pullRequestId,
-                );
+				// Fetch PR threads (comments)
+				threads = await this.azureDevOpsClient.getPullRequestThreads(
+					projectId,
+					repositoryId,
+					pullRequestId,
+				);
 
-                // Store in cache
-                cache.set(projectId, repositoryId, pullRequestId, fullPRDetails, iterations, fileChanges, threads);
-                cacheInfo = { isCached: false };
-            }
+				// Store in cache
+				cache.set(
+					projectId,
+					repositoryId,
+					pullRequestId,
+					fullPRDetails,
+					iterations,
+					fileChanges,
+					threads,
+				);
+				cacheInfo = { isCached: false };
+			}
 
-            // Update the entire PR object with fresh/cached details to ensure all fields are current
-            // This includes title, description, status, isDraft, reviewers, and all other fields
-            this.pullRequest = fullPRDetails;
+			// Update the entire PR object with fresh/cached details to ensure all fields are current
+			// This includes title, description, status, isDraft, reviewers, and all other fields
+			this.pullRequest = fullPRDetails;
 
-            // Convert markdown description to HTML
-            const { marked } = await PullRequestViewerPanel.getMarked();
-            const descriptionHtml = this.pullRequest.description
-                ? await marked(this.pullRequest.description)
-                : "No description provided.";
+			// Convert markdown description to HTML
+			const { marked } = await PullRequestViewerPanel.getMarked();
+			const descriptionHtml = this.pullRequest.description
+				? await marked(this.pullRequest.description)
+				: "No description provided.";
 
-            webview.html = this._getHtmlForWebview(webview, fileChanges, threads, descriptionHtml, cacheInfo);
-        } catch (error) {
-            const friendlyMessage = this._getFriendlyErrorMessage(error);
-            console.error("Error loading pull request:", error);
-            webview.html = this._getErrorHtml(friendlyMessage);
-        }
-    }
+			webview.html = this._getHtmlForWebview(
+				webview,
+				fileChanges,
+				threads,
+				descriptionHtml,
+				cacheInfo,
+			);
+		} catch (error) {
+			const friendlyMessage = this._getFriendlyErrorMessage(error);
+			logger.error("Error loading pull request:", error);
+			webview.html = this._getErrorHtml(friendlyMessage);
+		}
+	}
 
-    private _getLoadingHtml(): string {
-        return `<!DOCTYPE html>
+	private _getLoadingHtml(): string {
+		return `<!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
@@ -336,10 +339,10 @@ export class PullRequestViewerPanel {
             </div>
         </body>
         </html>`;
-    }
+	}
 
-    private _getErrorHtml(errorMessage: string): string {
-        return `<!DOCTYPE html>
+	private _getErrorHtml(errorMessage: string): string {
+		return `<!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
@@ -368,521 +371,533 @@ export class PullRequestViewerPanel {
             </div>
         </body>
         </html>`;
-    }
+	}
 
-    private _getHtmlForWebview(
-        webview: vscode.Webview,
-        fileChanges: PRFileChange[],
-        threads: PRThread[],
-        descriptionHtml: string,
-        cacheInfo: { isCached: boolean; ageInSeconds?: number },
-    ): string {
-        const pr = this.pullRequest;
-        const nonce = getNonce();
+	private _getHtmlForWebview(
+		webview: vscode.Webview,
+		fileChanges: PRFileChange[],
+		threads: PRThread[],
+		descriptionHtml: string,
+		cacheInfo: { isCached: boolean; ageInSeconds?: number },
+	): string {
+		const pr = this.pullRequest;
+		const nonce = getNonce();
 
-        // Format dates
-        const createdDate = pr.creationDate.toLocaleDateString();
-        const createdTime = pr.creationDate.toLocaleTimeString();
+		// Format dates
+		const createdDate = pr.creationDate.toLocaleDateString();
+		const createdTime = pr.creationDate.toLocaleTimeString();
 
-        // Format branch names
-        const sourceBranch = pr.sourceRefName
-            ? pr.sourceRefName.replace("refs/heads/", "")
-            : "unknown";
-        const targetBranch = pr.targetRefName
-            ? pr.targetRefName.replace("refs/heads/", "")
-            : "unknown";
+		// Format branch names
+		const sourceBranch = pr.sourceRefName ? pr.sourceRefName.replace("refs/heads/", "") : "unknown";
+		const targetBranch = pr.targetRefName ? pr.targetRefName.replace("refs/heads/", "") : "unknown";
 
-        // Build HTML using array join to avoid template literal issues with description content
-        const parts = [
-            "<!DOCTYPE html>",
-            "<html lang=\"en\">",
-            "<head>",
-            "<meta charset=\"UTF-8\">",
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">",
-            `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">`,
-            `<title>PR #${pr.pullRequestId}</title>`,
-            this._getStyles(),
-            "</head>",
-            "<body>",
-            "<div class=\"container\">",
-            this._getHeaderHtml(pr, sourceBranch, targetBranch, createdDate, createdTime, cacheInfo),
-            this._getTabNavigationHtml(fileChanges, threads),
-            "<div class=\"tab-content\">",
-            this._getConversationTabHtml(pr, descriptionHtml, threads),
-            this._getFilesTabHtml(fileChanges, threads),
-            "</div>",
-            "</div>",
-            this._getScripts(nonce),
-            "</body>",
-            "</html>",
-        ];
+		// Build HTML using array join to avoid template literal issues with description content
+		const parts = [
+			"<!DOCTYPE html>",
+			'<html lang="en">',
+			"<head>",
+			'<meta charset="UTF-8">',
+			'<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+			`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">`,
+			`<title>PR #${pr.pullRequestId}</title>`,
+			this._getStyles(),
+			"</head>",
+			"<body>",
+			'<div class="container">',
+			this._getHeaderHtml(pr, sourceBranch, targetBranch, createdDate, createdTime, cacheInfo),
+			this._getTabNavigationHtml(fileChanges, threads),
+			'<div class="tab-content">',
+			this._getConversationTabHtml(pr, descriptionHtml, threads),
+			this._getFilesTabHtml(fileChanges, threads),
+			"</div>",
+			"</div>",
+			this._getScripts(nonce),
+			"</body>",
+			"</html>",
+		];
 
-        return parts.join("");
-    }
+		return parts.join("");
+	}
 
-    /**
-     * Handle review submission from the webview
-     */
-    private async _handleReviewSubmission(vote: number) {
-        try {
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: "Submitting your review...",
-                    cancellable: false,
-                },
-                async (progress) => {
-                    progress.report({ increment: 0 });
+	/**
+	 * Handle review submission from the webview
+	 */
+	private async _handleReviewSubmission(vote: number) {
+		try {
+			await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: "Submitting your review...",
+					cancellable: false,
+				},
+				async (progress) => {
+					progress.report({ increment: 0 });
 
-                    // Get the current user
-                    const currentUser = await this.azureDevOpsClient.getCurrentUser();
+					// Get the current user
+					const currentUser = await this.azureDevOpsClient.getCurrentUser();
 
-                    progress.report({ increment: 50 });
+					progress.report({ increment: 50 });
 
-                    // Submit the vote
-                    await this.azureDevOpsClient.createReviewerVote(
-                        this.pullRequest.repository.project.id,
-                        this.pullRequest.repository.id,
-                        this.pullRequest.pullRequestId,
-                        currentUser.id,
-                        vote,
-                    );
+					// Submit the vote
+					await this.azureDevOpsClient.createReviewerVote(
+						this.pullRequest.repository.project.id,
+						this.pullRequest.repository.id,
+						this.pullRequest.pullRequestId,
+						currentUser.id,
+						vote,
+					);
 
-                    progress.report({ increment: 100 });
-                },
-            );
+					progress.report({ increment: 100 });
+				},
+			);
 
-            // Show success message based on vote type
-            let voteMessage = "Your vote has been submitted";
-            if (vote === 10) {
-                voteMessage = "You approved this pull request";
-            } else if (vote === 5) {
-                voteMessage = "You approved this pull request with suggestions";
-            } else if (vote === -5) {
-                voteMessage = "Marked as waiting for author";
-            } else if (vote === -10) {
-                voteMessage = "You rejected this pull request";
-            } else if (vote === 0) {
-                voteMessage = "Your vote has been reset";
-            }
+			// Show success message based on vote type
+			let voteMessage = "Your vote has been submitted";
+			if (vote === 10) {
+				voteMessage = "You approved this pull request";
+			} else if (vote === 5) {
+				voteMessage = "You approved this pull request with suggestions";
+			} else if (vote === -5) {
+				voteMessage = "Marked as waiting for author";
+			} else if (vote === -10) {
+				voteMessage = "You rejected this pull request";
+			} else if (vote === 0) {
+				voteMessage = "Your vote has been reset";
+			}
 
-            vscode.window.showInformationMessage(voteMessage);
+			vscode.window.showInformationMessage(voteMessage);
 
-            // Invalidate cache for this PR since the review state has changed
-            const cache = PRCacheService.getInstance();
-            cache.invalidate(
-                this.pullRequest.repository.project.id,
-                this.pullRequest.repository.id,
-                this.pullRequest.pullRequestId,
-            );
+			// Invalidate cache for this PR since the review state has changed
+			const cache = PRCacheService.getInstance();
+			cache.invalidate(
+				this.pullRequest.repository.project.id,
+				this.pullRequest.repository.id,
+				this.pullRequest.pullRequestId,
+			);
 
-            // Refresh the panel to show updated reviewer status
-            await this._update();
-        } catch (error) {
-            const friendlyMessage = this._getFriendlyErrorMessage(error);
-            console.error("Error submitting review:", error);
-            vscode.window.showErrorMessage(
-                `Failed to submit review: ${friendlyMessage}`,
-            );
-        }
-    }
+			// Refresh the panel to show updated reviewer status
+			await this._update();
+		} catch (error) {
+			const friendlyMessage = this._getFriendlyErrorMessage(error);
+			logger.error("Error submitting review:", error);
+			vscode.window.showErrorMessage(`Failed to submit review: ${friendlyMessage}`);
+		}
+	}
 
-    /**
-     * Open a file in diff view showing changes between base and modified versions
-     *
-     * CRITICAL METHOD - This creates virtual documents with the "azdo-pr" scheme
-     * which is essential for inline comment display to work correctly.
-     *
-     * The "azdo-pr" URI scheme is used to:
-     * 1. Identify PR diff documents vs regular files
-     * 2. Trigger comment loading via event listeners in extension.ts
-     * 3. Associate documents with PR context for commenting
-     *
-     * Flow for inline comments:
-     * 1. This method creates URIs with scheme "azdo-pr" (lines 510-515)
-     * 2. VS Code opens the diff view with these virtual documents
-     * 3. Event listeners in extension.ts detect the "azdo-pr" scheme
-     * 4. PRCommentController.loadCommentsForDocument() is called
-     * 5. Comments appear inline in the diff view
-     *
-     * DO NOT CHANGE the URI scheme without updating:
-     * - extension.ts event listeners (onDidOpenTextDocument, onDidChangeActiveTextEditor)
-     * - PRCommentController.loadCommentsForDocument() scheme check
-     * - PRCommentController.commentingRangeProvider scheme check
-     */
-    private async _openFileDiff(path: string, changeType: string, originalPath?: string) {
-        try {
-            console.log("Opening file diff:", path, "changeType:", changeType, "originalPath:", originalPath);
-            vscode.window.setStatusBarMessage(`Loading diff for ${path}...`, 3000);
+	/**
+	 * Open a file in diff view showing changes between base and modified versions
+	 *
+	 * CRITICAL METHOD - This creates virtual documents with the "azdo-pr" scheme
+	 * which is essential for inline comment display to work correctly.
+	 *
+	 * The "azdo-pr" URI scheme is used to:
+	 * 1. Identify PR diff documents vs regular files
+	 * 2. Trigger comment loading via event listeners in extension.ts
+	 * 3. Associate documents with PR context for commenting
+	 *
+	 * Flow for inline comments:
+	 * 1. This method creates URIs with scheme "azdo-pr" (lines 510-515)
+	 * 2. VS Code opens the diff view with these virtual documents
+	 * 3. Event listeners in extension.ts detect the "azdo-pr" scheme
+	 * 4. PRCommentController.loadCommentsForDocument() is called
+	 * 5. Comments appear inline in the diff view
+	 *
+	 * DO NOT CHANGE the URI scheme without updating:
+	 * - extension.ts event listeners (onDidOpenTextDocument, onDidChangeActiveTextEditor)
+	 * - PRCommentController.loadCommentsForDocument() scheme check
+	 * - PRCommentController.commentingRangeProvider scheme check
+	 */
+	private async _openFileDiff(path: string, changeType: string, originalPath?: string) {
+		try {
+			logger.debug(
+				`Opening file diff: ${path} changeType: ${changeType} originalPath: ${originalPath}`,
+			);
+			vscode.window.setStatusBarMessage(`Loading diff for ${path}...`, 3000);
 
-            const isAdded = changeType.includes("add");
-            const isDeleted = changeType.includes("delete");
-            const isRenamed = changeType.includes("rename");
+			const isAdded = changeType.includes("add");
+			const isDeleted = changeType.includes("delete");
+			const isRenamed = changeType.includes("rename");
 
-            // Check if file is potentially an LFS file (by extension)
-            const potentiallyLfs = this._isPotentiallyLfsFile(path);
+			// Check if file is potentially an LFS file (by extension)
+			const potentiallyLfs = this._isPotentiallyLfsFile(path);
 
-            if (potentiallyLfs) {
-                // Try to handle as LFS file
-                const handled = await this._handleLfsFile(path, changeType, originalPath);
-                if (handled) {
-                    return; // Successfully handled as LFS file
-                }
-                // Fall through to normal handling if LFS handling failed
-            }
+			if (potentiallyLfs) {
+				// Try to handle as LFS file
+				const handled = await this._handleLfsFile(path, changeType, originalPath);
+				if (handled) {
+					return; // Successfully handled as LFS file
+				}
+				// Fall through to normal handling if LFS handling failed
+			}
 
-            // Get branch names for display in URIs
-            const sourceBranch = this.pullRequest.sourceRefName
-                ? this.pullRequest.sourceRefName.replace("refs/heads/", "")
-                : "unknown";
-            const targetBranch = this.pullRequest.targetRefName
-                ? this.pullRequest.targetRefName.replace("refs/heads/", "")
-                : "unknown";
+			// Get branch names for display in URIs
+			const sourceBranch = this.pullRequest.sourceRefName
+				? this.pullRequest.sourceRefName.replace("refs/heads/", "")
+				: "unknown";
+			const targetBranch = this.pullRequest.targetRefName
+				? this.pullRequest.targetRefName.replace("refs/heads/", "")
+				: "unknown";
 
-            // Get commit SHAs or branch names for fetching files
-            // Prefer commit SHAs (more reliable), but fall back to branch names if not available
-            let sourceVersion = this.pullRequest.lastMergeSourceCommit?.commitId;
-            let targetVersion = this.pullRequest.lastMergeTargetCommit?.commitId;
+			// Get commit SHAs or branch names for fetching files
+			// Prefer commit SHAs (more reliable), but fall back to branch names if not available
+			let sourceVersion = this.pullRequest.lastMergeSourceCommit?.commitId;
+			let targetVersion = this.pullRequest.lastMergeTargetCommit?.commitId;
 
-            if (!sourceVersion || !targetVersion) {
-                console.log("[PRViewerPanel] Commit SHAs not available, falling back to branch names");
-                sourceVersion = sourceBranch;
-                targetVersion = targetBranch;
-            }
+			if (!sourceVersion || !targetVersion) {
+				logger.debug("[PRViewerPanel] Commit SHAs not available, falling back to branch names");
+				sourceVersion = sourceBranch;
+				targetVersion = targetBranch;
+			}
 
-            console.log("[PRViewerPanel] Version information:", {
-                sourceVersion,
-                targetVersion,
-                usingCommitSHAs: !!this.pullRequest.lastMergeSourceCommit?.commitId,
-            });
+			logger.debug("[PRViewerPanel] Version information:", {
+				sourceVersion,
+				targetVersion,
+				usingCommitSHAs: !!this.pullRequest.lastMergeSourceCommit?.commitId,
+			});
 
-            // Fetch both versions of the file
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: `Fetching diff for ${path}...`,
-                    cancellable: false,
-                },
-                async (progress) => {
-                    progress.report({ increment: 0 });
+			// Fetch both versions of the file
+			await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: `Fetching diff for ${path}...`,
+					cancellable: false,
+				},
+				async (progress) => {
+					progress.report({ increment: 0 });
 
-                    let baseContent = "";
-                    let modifiedContent = "";
+					let baseContent = "";
+					let modifiedContent = "";
 
-                    try {
-                        // Fetch base version (from target) unless file is added
-                        if (!isAdded) {
-                            progress.report({
-                                increment: 25,
-                                message: "Fetching base version...",
-                            });
-                            // Use originalPath for renamed files when fetching the base version
-                            const basePathToFetch = isRenamed && originalPath ? originalPath : path;
-                            try {
-                                baseContent = await this.azureDevOpsClient.getFileContent(
-                                    this.pullRequest.repository.project.id,
-                                    this.pullRequest.repository.id,
-                                    basePathToFetch,
-                                    targetVersion,
-                                );
-                            } catch (error) {
-                                // If base file doesn't exist (404), treat as new file (empty base content)
-                                // This handles cases where Azure DevOps reports changeType as "edit" for new files
-                                if (error instanceof Error && error.message.includes("File not found")) {
-                                    console.log(`[PRViewerPanel] Base file not found, treating as new file: ${basePathToFetch}`);
-                                    baseContent = "";
-                                } else {
-                                    throw error;
-                                }
-                            }
-                        }
+					try {
+						// Fetch base version (from target) unless file is added
+						if (!isAdded) {
+							progress.report({
+								increment: 25,
+								message: "Fetching base version...",
+							});
+							// Use originalPath for renamed files when fetching the base version
+							const basePathToFetch = isRenamed && originalPath ? originalPath : path;
+							try {
+								baseContent = await this.azureDevOpsClient.getFileContent(
+									this.pullRequest.repository.project.id,
+									this.pullRequest.repository.id,
+									basePathToFetch,
+									targetVersion,
+								);
+							} catch (error) {
+								// If base file doesn't exist (404), treat as new file (empty base content)
+								// This handles cases where Azure DevOps reports changeType as "edit" for new files
+								if (error instanceof Error && error.message.includes("File not found")) {
+									logger.debug(
+										`PRViewerPanel: Base file not found, treating as new file: ${basePathToFetch}`,
+									);
+									baseContent = "";
+								} else {
+									throw error;
+								}
+							}
+						}
 
-                        // Fetch modified version (from source) unless file is deleted
-                        if (!isDeleted) {
-                            progress.report({
-                                increment: 50,
-                                message: "Fetching modified version...",
-                            });
-                            modifiedContent = await this.azureDevOpsClient.getFileContent(
-                                this.pullRequest.repository.project.id,
-                                this.pullRequest.repository.id,
-                                path,
-                                sourceVersion,
-                            );
-                        }
+						// Fetch modified version (from source) unless file is deleted
+						if (!isDeleted) {
+							progress.report({
+								increment: 50,
+								message: "Fetching modified version...",
+							});
+							modifiedContent = await this.azureDevOpsClient.getFileContent(
+								this.pullRequest.repository.project.id,
+								this.pullRequest.repository.id,
+								path,
+								sourceVersion,
+							);
+						}
 
-                        progress.report({ increment: 75, message: "Opening diff view..." });
+						progress.report({ increment: 75, message: "Opening diff view..." });
 
-                        // ================================================================
-                        // CRITICAL: Create virtual document URIs with "azdo-pr" scheme
-                        // This specific scheme is REQUIRED for inline comments to work!
-                        // Event listeners in extension.ts watch for this scheme to trigger
-                        // comment loading. DO NOT CHANGE "azdo-pr" without updating all
-                        // related event listeners and comment controller code.
-                        // ================================================================
-                        const prId = this.pullRequest.pullRequestId;
-                        const repoName = this.pullRequest.repository?.name || "unknown";
-                        const baseUri = vscode.Uri.parse(
-                            `azdo-pr:base/${prId}${path}?pr=${prId}&repo=${repoName}&branch=${targetBranch}`,
-                        );
-                        const modifiedUri = vscode.Uri.parse(
-                            `azdo-pr:modified/${prId}${path}?pr=${prId}&repo=${repoName}&branch=${sourceBranch}`,
-                        );
+						// ================================================================
+						// CRITICAL: Create virtual document URIs with "azdo-pr" scheme
+						// This specific scheme is REQUIRED for inline comments to work!
+						// Event listeners in extension.ts watch for this scheme to trigger
+						// comment loading. DO NOT CHANGE "azdo-pr" without updating all
+						// related event listeners and comment controller code.
+						// ================================================================
+						const prId = this.pullRequest.pullRequestId;
+						const repoName = this.pullRequest.repository?.name || "unknown";
+						const baseUri = vscode.Uri.parse(
+							`azdo-pr:base/${prId}${path}?pr=${prId}&repo=${repoName}&branch=${targetBranch}`,
+						);
+						const modifiedUri = vscode.Uri.parse(
+							`azdo-pr:modified/${prId}${path}?pr=${prId}&repo=${repoName}&branch=${sourceBranch}`,
+						);
 
-                        // Register content provider if not already registered
-                        if (!PullRequestViewerPanel._contentProviderRegistered) {
-                            PullRequestViewerPanel._contentProviderRegistered = true;
-                            vscode.workspace.registerTextDocumentContentProvider("azdo-pr", {
-                                provideTextDocumentContent: (uri: vscode.Uri): string => {
-                                    const cached = PullRequestViewerPanel._virtualFileCache.get(
-                                        uri.toString(),
-                                    );
-                                    return cached ? cached.content : "";
-                                },
-                            });
-                        }
+						// Register content provider if not already registered
+						if (!PullRequestViewerPanel._contentProviderRegistered) {
+							PullRequestViewerPanel._contentProviderRegistered = true;
+							vscode.workspace.registerTextDocumentContentProvider("azdo-pr", {
+								provideTextDocumentContent: (uri: vscode.Uri): string => {
+									const cached = PullRequestViewerPanel._virtualFileCache.get(uri.toString());
+									return cached ? cached.content : "";
+								},
+							});
+						}
 
-                        // Cache the content for both versions with timestamps
-                        const now = Date.now();
-                        PullRequestViewerPanel._virtualFileCache.set(
-                            baseUri.toString(),
-                            { content: baseContent, timestamp: now, prId },
-                        );
-                        PullRequestViewerPanel._virtualFileCache.set(
-                            modifiedUri.toString(),
-                            { content: modifiedContent, timestamp: now, prId },
-                        );
+						// Cache the content for both versions with timestamps
+						const now = Date.now();
+						PullRequestViewerPanel._virtualFileCache.set(baseUri.toString(), {
+							content: baseContent,
+							timestamp: now,
+							prId,
+						});
+						PullRequestViewerPanel._virtualFileCache.set(modifiedUri.toString(), {
+							content: modifiedContent,
+							timestamp: now,
+							prId,
+						});
 
-                        // Create title for diff view
-                        const fileName = path.split("/").pop() || path;
-                        let title = `${fileName} (PR #${prId})`;
-                        if (isAdded) {
-                            title = `${fileName} (Added in PR #${prId})`;
-                        } else if (isDeleted) {
-                            title = `${fileName} (Deleted in PR #${prId})`;
-                        } else if (isRenamed && originalPath) {
-                            const originalFileName = originalPath.split("/").pop() || originalPath;
-                            title = `${originalFileName} → ${fileName} (Renamed in PR #${prId})`;
-                        }
+						// Create title for diff view
+						const fileName = path.split("/").pop() || path;
+						let title = `${fileName} (PR #${prId})`;
+						if (isAdded) {
+							title = `${fileName} (Added in PR #${prId})`;
+						} else if (isDeleted) {
+							title = `${fileName} (Deleted in PR #${prId})`;
+						} else if (isRenamed && originalPath) {
+							const originalFileName = originalPath.split("/").pop() || originalPath;
+							title = `${originalFileName} → ${fileName} (Renamed in PR #${prId})`;
+						}
 
-                        // Associate both sides of the diff with the PR context for commenting
-                        // IMPORTANT: Set context BEFORE opening diff to avoid race condition
-                        const contextManager = PRContextManager.getInstance();
+						// Associate both sides of the diff with the PR context for commenting
+						// IMPORTANT: Set context BEFORE opening diff to avoid race condition
+						const contextManager = PRContextManager.getInstance();
 
-                        // Base (left) side context
-                        const baseContext: PRFileContext = {
-                            pullRequest: this.pullRequest,
-                            filePath: path,
-                            side: "base",
-                            changeType: changeType,
-                        };
-                        contextManager.setPRFileContext(baseUri, baseContext);
-                        console.log(`[PRViewerPanel] Set base context for: ${baseUri.toString()}`);
+						// Base (left) side context
+						const baseContext: PRFileContext = {
+							pullRequest: this.pullRequest,
+							filePath: path,
+							side: "base",
+							changeType: changeType,
+						};
+						contextManager.setPRFileContext(baseUri, baseContext);
+						logger.debug(`PRViewerPanel: Set base context for: ${baseUri.toString()}`);
 
-                        // Modified (right) side context
-                        const modifiedContext: PRFileContext = {
-                            pullRequest: this.pullRequest,
-                            filePath: path,
-                            side: "modified",
-                            changeType: changeType,
-                        };
-                        contextManager.setPRFileContext(modifiedUri, modifiedContext);
-                        console.log(`[PRViewerPanel] Set modified context for: ${modifiedUri.toString()}`);
+						// Modified (right) side context
+						const modifiedContext: PRFileContext = {
+							pullRequest: this.pullRequest,
+							filePath: path,
+							side: "modified",
+							changeType: changeType,
+						};
+						contextManager.setPRFileContext(modifiedUri, modifiedContext);
+						logger.debug(`PRViewerPanel: Set modified context for: ${modifiedUri.toString()}`);
 
-                        // Legacy support
-                        contextManager.setFileContext(
-                            modifiedUri.toString(),
-                            this.pullRequest,
-                        );
+						// Legacy support
+						contextManager.setFileContext(modifiedUri.toString(), this.pullRequest);
 
-                        // Open diff view
-                        await vscode.commands.executeCommand(
-                            "vscode.diff",
-                            baseUri,
-                            modifiedUri,
-                            title,
-                        );
+						// Open diff view
+						await vscode.commands.executeCommand("vscode.diff", baseUri, modifiedUri, title);
 
-                        progress.report({ increment: 100 });
-                        console.log("Diff view opened successfully for:", path);
-                    } catch (error) {
-                        // Log the full error details for debugging
-                        console.error("[PRViewerPanel] Error fetching file content - Full error details:", error);
-                        if (error instanceof Error) {
-                            console.error("[PRViewerPanel] Error message:", error.message);
-                            console.error("[PRViewerPanel] Error stack:", error.stack);
-                        }
+						progress.report({ increment: 100 });
+						logger.debug("Diff view opened successfully for:", path);
+					} catch (error) {
+						// Log the full error details for debugging
+						logger.error(
+							"[PRViewerPanel] Error fetching file content - Full error details:",
+							error,
+						);
+						if (error instanceof Error) {
+							logger.error("PRViewerPanel: Error message:", error.message);
+							logger.error("PRViewerPanel: Error stack:", error.stack);
+						}
 
-                        const friendlyMessage = this._getFriendlyErrorMessage(error);
-                        console.error("[PRViewerPanel] Friendly error message:", friendlyMessage);
+						const friendlyMessage = this._getFriendlyErrorMessage(error);
+						logger.error("PRViewerPanel: Friendly error message:", friendlyMessage);
 
-                        // Offer to view in browser as fallback
-                        const action = await vscode.window.showErrorMessage(
-                            `Failed to fetch file content: ${friendlyMessage}`,
-                            "View in Browser",
-                        );
+						// Offer to view in browser as fallback
+						const action = await vscode.window.showErrorMessage(
+							`Failed to fetch file content: ${friendlyMessage}`,
+							"View in Browser",
+						);
 
-                        if (action === "View in Browser") {
-                            const org = vscode.workspace
-                                .getConfiguration("azureDevOpsPRViewer")
-                                .get<string>("organization", "");
-                            const projectName =
-                                this.pullRequest.repository?.project?.name || "unknown";
-                            const repoName = this.pullRequest.repository?.name || "unknown";
-                            const webUrl = `https://dev.azure.com/${org}/${projectName}/_git/${repoName}/pullrequest/${this.pullRequest.pullRequestId}?_a=files&path=${encodeURIComponent(path)}`;
-                            vscode.env.openExternal(vscode.Uri.parse(webUrl));
-                        }
-                    }
-                },
-            );
-        } catch (error) {
-            const friendlyMessage = this._getFriendlyErrorMessage(error);
-            console.error("Error opening file diff:", error);
-            vscode.window.showErrorMessage(`Failed to open diff: ${friendlyMessage}`);
-        }
-    }
+						if (action === "View in Browser") {
+							const org = vscode.workspace
+								.getConfiguration("azureDevOpsPRViewer")
+								.get<string>("organization", "");
+							const projectName = this.pullRequest.repository?.project?.name || "unknown";
+							const repoName = this.pullRequest.repository?.name || "unknown";
+							const webUrl = `https://dev.azure.com/${org}/${projectName}/_git/${repoName}/pullrequest/${this.pullRequest.pullRequestId}?_a=files&path=${encodeURIComponent(path)}`;
+							vscode.env.openExternal(vscode.Uri.parse(webUrl));
+						}
+					}
+				},
+			);
+		} catch (error) {
+			const friendlyMessage = this._getFriendlyErrorMessage(error);
+			logger.error("Error opening file diff:", error);
+			vscode.window.showErrorMessage(`Failed to open diff: ${friendlyMessage}`);
+		}
+	}
 
-    /**
-     * Check if a file path is potentially an LFS file based on extension
-     */
-    private _isPotentiallyLfsFile(path: string): boolean {
-        const lfsExtensions = [
-            '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
-            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico',
-            '.mp4', '.mov', '.avi', '.mkv', '.webm',
-            '.mp3', '.wav', '.flac', '.zip', '.tar', '.gz'
-        ];
-        const lowerPath = path.toLowerCase();
-        return lfsExtensions.some(ext => lowerPath.endsWith(ext));
-    }
+	/**
+	 * Check if a file path is potentially an LFS file based on extension
+	 */
+	private _isPotentiallyLfsFile(path: string): boolean {
+		const lfsExtensions = [
+			".pdf",
+			".doc",
+			".docx",
+			".ppt",
+			".pptx",
+			".xls",
+			".xlsx",
+			".png",
+			".jpg",
+			".jpeg",
+			".gif",
+			".bmp",
+			".tiff",
+			".ico",
+			".mp4",
+			".mov",
+			".avi",
+			".mkv",
+			".webm",
+			".mp3",
+			".wav",
+			".flac",
+			".zip",
+			".tar",
+			".gz",
+		];
+		const lowerPath = path.toLowerCase();
+		return lfsExtensions.some((ext) => lowerPath.endsWith(ext));
+	}
 
-    /**
-     * Handle LFS file display
-     * Returns true if successfully handled, false if should fall back to normal diff
-     */
-    private async _handleLfsFile(
-        path: string,
-        changeType: string,
-        originalPath?: string
-    ): Promise<boolean> {
-        try {
-            // Skip deleted files (can't preview them)
-            if (changeType.includes("delete")) {
-                vscode.window.showInformationMessage(
-                    `Deleted files cannot be previewed. File: ${path}`
-                );
-                return true; // Handled (by showing message)
-            }
+	/**
+	 * Handle LFS file display
+	 * Returns true if successfully handled, false if should fall back to normal diff
+	 */
+	private async _handleLfsFile(
+		path: string,
+		changeType: string,
+		_originalPath?: string,
+	): Promise<boolean> {
+		try {
+			// Skip deleted files (can't preview them)
+			if (changeType.includes("delete")) {
+				vscode.window.showInformationMessage(`Deleted files cannot be previewed. File: ${path}`);
+				return true; // Handled (by showing message)
+			}
 
-            const sourceVersion = this.pullRequest.lastMergeSourceCommit?.commitId
-                || this.pullRequest.sourceRefName.replace("refs/heads/", "");
+			const sourceVersion =
+				this.pullRequest.lastMergeSourceCommit?.commitId ||
+				this.pullRequest.sourceRefName.replace("refs/heads/", "");
 
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: `Downloading LFS file: ${path}...`,
-                    cancellable: false,
-                },
-                async (progress) => {
-                    progress.report({ increment: 10 });
+			await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: `Downloading LFS file: ${path}...`,
+					cancellable: false,
+				},
+				async (progress) => {
+					progress.report({ increment: 10 });
 
-                    // Step 1: Fetch file content (might be LFS pointer)
-                    const content = await this.azureDevOpsClient.getFileContent(
-                        this.pullRequest.repository.project.id,
-                        this.pullRequest.repository.id,
-                        path,
-                        sourceVersion
-                    );
+					// Step 1: Fetch file content (might be LFS pointer)
+					const content = await this.azureDevOpsClient.getFileContent(
+						this.pullRequest.repository.project.id,
+						this.pullRequest.repository.id,
+						path,
+						sourceVersion,
+					);
 
-                    progress.report({ increment: 30 });
+					progress.report({ increment: 30 });
 
-                    // Step 2: Get LFS service instance
-                    const lfsService = this._getLfsService();
+					// Step 2: Get LFS service instance
+					const lfsService = this._getLfsService();
 
-                    // Step 3: Check if it's actually an LFS pointer
-                    if (!lfsService.isLfsPointer(content)) {
-                        console.log('[PRViewerPanel] File is not LFS, falling back to normal diff');
-                        return false; // Not LFS, use normal handling
-                    }
+					// Step 3: Check if it's actually an LFS pointer
+					if (!lfsService.isLfsPointer(content)) {
+						logger.debug("[PRViewerPanel] File is not LFS, falling back to normal diff");
+						return false; // Not LFS, use normal handling
+					}
 
-                    console.log('[PRViewerPanel] Detected LFS pointer file');
-                    progress.report({ increment: 50, message: 'Resolving LFS file...' });
+					logger.debug("[PRViewerPanel] Detected LFS pointer file");
+					progress.report({ increment: 50, message: "Resolving LFS file..." });
 
-                    // Step 4: Download actual LFS content
-                    const lfsContent = await lfsService.downloadLfsFile(
-                        this.pullRequest.repository.project.id,
-                        this.pullRequest.repository.id,
-                        path,
-                        sourceVersion
-                    );
+					// Step 4: Download actual LFS content
+					const lfsContent = await lfsService.downloadLfsFile(
+						this.pullRequest.repository.project.id,
+						this.pullRequest.repository.id,
+						path,
+						sourceVersion,
+					);
 
-                    progress.report({ increment: 80, message: 'Opening file...' });
+					progress.report({ increment: 80, message: "Opening file..." });
 
-                    // Step 5: Get appropriate handler and display
-                    const handler = this._getFileHandlerRegistry().getHandler(path);
-                    if (!handler) {
-                        vscode.window.showWarningMessage(
-                            `No viewer available for ${path}. File type not yet supported.`
-                        );
-                        return true; // Handled (by showing message)
-                    }
+					// Step 5: Get appropriate handler and display
+					const handler = this._getFileHandlerRegistry().getHandler(path);
+					if (!handler) {
+						vscode.window.showWarningMessage(
+							`No viewer available for ${path}. File type not yet supported.`,
+						);
+						return true; // Handled (by showing message)
+					}
 
-                    const prContext: PRContext = {
-                        pullRequestId: this.pullRequest.pullRequestId,
-                        projectId: this.pullRequest.repository.project.id,
-                        repositoryId: this.pullRequest.repository.id,
-                        repositoryName: this.pullRequest.repository.name,
-                        filePath: path,
-                        version: sourceVersion,
-                    };
+					const prContext: PRContext = {
+						pullRequestId: this.pullRequest.pullRequestId,
+						projectId: this.pullRequest.repository.project.id,
+						repositoryId: this.pullRequest.repository.id,
+						repositoryName: this.pullRequest.repository.name,
+						filePath: path,
+						version: sourceVersion,
+					};
 
-                    await handler.displayFile(lfsContent, path, prContext);
+					await handler.displayFile(lfsContent, path, prContext);
 
-                    progress.report({ increment: 100 });
-                    return true; // Successfully handled
-                }
-            );
+					progress.report({ increment: 100 });
+					return true; // Successfully handled
+				},
+			);
 
-            return true;
-        } catch (error) {
-            console.error('[PRViewerPanel] LFS file handling failed:', error);
-            vscode.window.showErrorMessage(
-                `Failed to load LFS file: ${error instanceof Error ? error.message : String(error)}`
-            );
-            return true; // Handled (by showing error)
-        }
-    }
+			return true;
+		} catch (error) {
+			logger.error("PRViewerPanel: LFS file handling failed:", error);
+			vscode.window.showErrorMessage(
+				`Failed to load LFS file: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return true; // Handled (by showing error)
+		}
+	}
 
-    /**
-     * Get or create LFS service singleton
-     */
-    private _getLfsService(): LfsService {
-        if (!PullRequestViewerPanel._lfsService) {
-            PullRequestViewerPanel._lfsService = new LfsService(
-                this.azureDevOpsClient,
-                this._getFileHandlerRegistry()
-            );
-        }
-        return PullRequestViewerPanel._lfsService;
-    }
+	/**
+	 * Get or create LFS service singleton
+	 */
+	private _getLfsService(): LfsService {
+		if (!PullRequestViewerPanel._lfsService) {
+			PullRequestViewerPanel._lfsService = new LfsService(
+				this.azureDevOpsClient,
+				this._getFileHandlerRegistry(),
+			);
+		}
+		return PullRequestViewerPanel._lfsService;
+	}
 
-    /**
-     * Get or create file handler registry singleton
-     */
-    private _getFileHandlerRegistry(): FileHandlerRegistry {
-        if (!PullRequestViewerPanel._fileHandlerRegistry) {
-            const registry = new FileHandlerRegistry();
-            // Register handlers in order of specificity
-            registry.register(new PdfFileHandler());
-            // Future: registry.register(new ImageFileHandler());
-            // Future: registry.register(new FallbackBinaryHandler());
-            PullRequestViewerPanel._fileHandlerRegistry = registry;
-        }
-        return PullRequestViewerPanel._fileHandlerRegistry;
-    }
+	/**
+	 * Get or create file handler registry singleton
+	 */
+	private _getFileHandlerRegistry(): FileHandlerRegistry {
+		if (!PullRequestViewerPanel._fileHandlerRegistry) {
+			const registry = new FileHandlerRegistry();
+			// Register handlers in order of specificity
+			registry.register(new PdfFileHandler());
+			// Future: registry.register(new ImageFileHandler());
+			// Future: registry.register(new FallbackBinaryHandler());
+			PullRequestViewerPanel._fileHandlerRegistry = registry;
+		}
+		return PullRequestViewerPanel._fileHandlerRegistry;
+	}
 
-    private _getStyles(): string {
-        return `<style>
+	private _getStyles(): string {
+		return `<style>
             * {
                 box-sizing: border-box;
             }
@@ -1649,23 +1664,23 @@ export class PullRequestViewerPanel {
                 font-size: 12px;
             }
         </style>`;
-    }
+	}
 
-    /**
-     * Get the tab navigation HTML
-     */
-    private _getTabNavigationHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
-        const fileCount = fileChanges.filter((c) => !c.item.isFolder).length;
-        const generalCommentCount = threads.filter((thread) =>
-            !thread.threadContext?.filePath && !this._isVoteNotification(thread)
-        ).length;
+	/**
+	 * Get the tab navigation HTML
+	 */
+	private _getTabNavigationHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
+		const fileCount = fileChanges.filter((c) => !c.item.isFolder).length;
+		const generalCommentCount = threads.filter(
+			(thread) => !thread.threadContext?.filePath && !this._isVoteNotification(thread),
+		).length;
 
-        return `
+		return `
         <div class="tab-navigation">
             <button class="tab-button active" data-tab="conversation">
                 <span class="tab-icon">💬</span>
                 Conversation
-                ${generalCommentCount > 0 ? `<span class="tab-badge">${generalCommentCount}</span>` : ''}
+                ${generalCommentCount > 0 ? `<span class="tab-badge">${generalCommentCount}</span>` : ""}
             </button>
             <button class="tab-button" data-tab="files">
                 <span class="tab-icon">📄</span>
@@ -1673,13 +1688,17 @@ export class PullRequestViewerPanel {
                 <span class="tab-badge">${fileCount}</span>
             </button>
         </div>`;
-    }
+	}
 
-    /**
-     * Get the conversation tab content
-     */
-    private _getConversationTabHtml(pr: PullRequest, descriptionHtml: string, threads: PRThread[]): string {
-        return `
+	/**
+	 * Get the conversation tab content
+	 */
+	private _getConversationTabHtml(
+		pr: PullRequest,
+		descriptionHtml: string,
+		threads: PRThread[],
+	): string {
+		return `
         <div class="tab-panel active" data-panel="conversation">
             <div class="conversation-layout">
                 <div class="conversation-sidebar">
@@ -1691,50 +1710,50 @@ export class PullRequestViewerPanel {
                 </div>
             </div>
         </div>`;
-    }
+	}
 
-    /**
-     * Get the files tab content
-     */
-    private _getFilesTabHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
-        return `
+	/**
+	 * Get the files tab content
+	 */
+	private _getFilesTabHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
+		return `
         <div class="tab-panel" data-panel="files">
             ${this._getFileChangesHtml(fileChanges, threads)}
         </div>`;
-    }
+	}
 
-    private _getHeaderHtml(
-        pr: PullRequest,
-        sourceBranch: string,
-        targetBranch: string,
-        createdDate: string,
-        createdTime: string,
-        cacheInfo: { isCached: boolean; ageInSeconds?: number },
-    ): string {
-        const statusClass = pr.isDraft ? "status-draft" : "status-active";
-        const statusText = pr.isDraft ? "draft" : pr.status;
+	private _getHeaderHtml(
+		pr: PullRequest,
+		sourceBranch: string,
+		targetBranch: string,
+		createdDate: string,
+		createdTime: string,
+		cacheInfo: { isCached: boolean; ageInSeconds?: number },
+	): string {
+		const statusClass = pr.isDraft ? "status-draft" : "status-active";
+		const statusText = pr.isDraft ? "draft" : pr.status;
 
-        // Build the PR URL
-        const org = vscode.workspace
-            .getConfiguration("azureDevOpsPRViewer")
-            .get<string>("organization", "");
-        const prUrl = `https://dev.azure.com/${org}/${pr.repository?.project?.name || "unknown"}/_git/${pr.repository?.name || "unknown"}/pullrequest/${pr.pullRequestId}`;
+		// Build the PR URL
+		const org = vscode.workspace
+			.getConfiguration("azureDevOpsPRViewer")
+			.get<string>("organization", "");
+		const prUrl = `https://dev.azure.com/${org}/${pr.repository?.project?.name || "unknown"}/_git/${pr.repository?.name || "unknown"}/pullrequest/${pr.pullRequestId}`;
 
-        // Build refresh button tooltip with cache status
-        let refreshTooltip = "Refresh PR data";
-        if (cacheInfo.isCached && cacheInfo.ageInSeconds !== undefined) {
-            const minutes = Math.floor(cacheInfo.ageInSeconds / 60);
-            const seconds = cacheInfo.ageInSeconds % 60;
-            if (minutes > 0) {
-                refreshTooltip = `Cached ${minutes}m ${seconds}s ago - Click to refresh`;
-            } else {
-                refreshTooltip = `Cached ${seconds}s ago - Click to refresh`;
-            }
-        } else if (!cacheInfo.isCached) {
-            refreshTooltip = "Fresh data loaded - Click to refresh";
-        }
+		// Build refresh button tooltip with cache status
+		let refreshTooltip = "Refresh PR data";
+		if (cacheInfo.isCached && cacheInfo.ageInSeconds !== undefined) {
+			const minutes = Math.floor(cacheInfo.ageInSeconds / 60);
+			const seconds = cacheInfo.ageInSeconds % 60;
+			if (minutes > 0) {
+				refreshTooltip = `Cached ${minutes}m ${seconds}s ago - Click to refresh`;
+			} else {
+				refreshTooltip = `Cached ${seconds}s ago - Click to refresh`;
+			}
+		} else if (!cacheInfo.isCached) {
+			refreshTooltip = "Fresh data loaded - Click to refresh";
+		}
 
-        return `
+		return `
         <div class="header">
             <div class="header-top">
                 <h1 class="pr-title">
@@ -1769,59 +1788,60 @@ export class PullRequestViewerPanel {
                 <span class="branch">${this._escapeHtml(targetBranch)}</span>
             </div>
         </div>`;
-    }
+	}
 
-    private _getCombinedReviewsHtml(pr: PullRequest): string {
-        // Calculate vote counts
-        const approvedCount = pr.reviewers?.filter((r) => r.vote === 10).length || 0;
-        const approvedWithSuggestionsCount = pr.reviewers?.filter((r) => r.vote === 5).length || 0;
-        const rejectedCount = pr.reviewers?.filter((r) => r.vote === -10).length || 0;
-        const waitingCount = pr.reviewers?.filter((r) => r.vote === 0).length || 0;
+	private _getCombinedReviewsHtml(pr: PullRequest): string {
+		// Calculate vote counts
+		const approvedCount = pr.reviewers?.filter((r) => r.vote === 10).length || 0;
+		const approvedWithSuggestionsCount = pr.reviewers?.filter((r) => r.vote === 5).length || 0;
+		const rejectedCount = pr.reviewers?.filter((r) => r.vote === -10).length || 0;
+		const waitingCount = pr.reviewers?.filter((r) => r.vote === 0).length || 0;
 
-        // Build reviewer items
-        let reviewerItems = '<div class="empty-state" style="padding: 15px; text-align: center;">No reviewers assigned</div>';
+		// Build reviewer items
+		let reviewerItems =
+			'<div class="empty-state" style="padding: 15px; text-align: center;">No reviewers assigned</div>';
 
-        if (pr.reviewers && pr.reviewers.length > 0) {
-            // Sort reviewers: required reviewers first, then by name
-            const sortedReviewers = [...pr.reviewers].sort((a, b) => {
-                // Required reviewers come first
-                if (a.isRequired && !b.isRequired) return -1;
-                if (!a.isRequired && b.isRequired) return 1;
-                // Otherwise sort alphabetically by display name
-                const nameA = a.displayName || a.uniqueName || "";
-                const nameB = b.displayName || b.uniqueName || "";
-                return nameA.localeCompare(nameB);
-            });
+		if (pr.reviewers && pr.reviewers.length > 0) {
+			// Sort reviewers: required reviewers first, then by name
+			const sortedReviewers = [...pr.reviewers].sort((a, b) => {
+				// Required reviewers come first
+				if (a.isRequired && !b.isRequired) return -1;
+				if (!a.isRequired && b.isRequired) return 1;
+				// Otherwise sort alphabetically by display name
+				const nameA = a.displayName || a.uniqueName || "";
+				const nameB = b.displayName || b.uniqueName || "";
+				return nameA.localeCompare(nameB);
+			});
 
-            reviewerItems = sortedReviewers
-                .map((reviewer) => {
-                    let voteIcon = "○";
-                    let voteClass = "vote-waiting";
-                    let voteText = "No vote";
+			reviewerItems = sortedReviewers
+				.map((reviewer) => {
+					let voteIcon = "○";
+					let voteClass = "vote-waiting";
+					let voteText = "No vote";
 
-                    if (reviewer.vote === 10) {
-                        voteIcon = "✓";
-                        voteClass = "vote-approved";
-                        voteText = "Approved";
-                    } else if (reviewer.vote === 5) {
-                        voteIcon = "✓";
-                        voteClass = "vote-approved-suggestions";
-                        voteText = "Approved with suggestions";
-                    } else if (reviewer.vote === -5) {
-                        voteIcon = "⏸";
-                        voteClass = "vote-waiting-author";
-                        voteText = "Waiting for author";
-                    } else if (reviewer.vote === -10) {
-                        voteIcon = "✗";
-                        voteClass = "vote-rejected";
-                        voteText = "Rejected";
-                    }
+					if (reviewer.vote === 10) {
+						voteIcon = "✓";
+						voteClass = "vote-approved";
+						voteText = "Approved";
+					} else if (reviewer.vote === 5) {
+						voteIcon = "✓";
+						voteClass = "vote-approved-suggestions";
+						voteText = "Approved with suggestions";
+					} else if (reviewer.vote === -5) {
+						voteIcon = "⏸";
+						voteClass = "vote-waiting-author";
+						voteText = "Waiting for author";
+					} else if (reviewer.vote === -10) {
+						voteIcon = "✗";
+						voteClass = "vote-rejected";
+						voteText = "Rejected";
+					}
 
-                    const requiredBadge = reviewer.isRequired
-                        ? '<span class="required-badge">Required</span>'
-                        : "";
+					const requiredBadge = reviewer.isRequired
+						? '<span class="required-badge">Required</span>'
+						: "";
 
-                    return `
+					return `
 					<div class="reviewer-item">
 						<div class="reviewer-info">
 							<span class="reviewer-name">${this._escapeHtml(reviewer.displayName || reviewer.uniqueName || "[Reviewer name unavailable]")}</span>
@@ -1832,11 +1852,11 @@ export class PullRequestViewerPanel {
 							<span class="vote-text ${voteClass}">${voteText}</span>
 						</div>
 					</div>`;
-                })
-                .join("");
-        }
+				})
+				.join("");
+		}
 
-        return `
+		return `
         <div class="reviews-combined-section">
             <div class="reviews-header">
                 <h3 class="section-title" style="font-size: 14px;">Reviews (${pr.reviewers?.length || 0})</h3>
@@ -1882,265 +1902,172 @@ export class PullRequestViewerPanel {
                 </div>
             </div>
         </div>`;
-    }
+	}
 
-    private _getReviewActionsHtml(pr: PullRequest): string {
-        return `
-        <div class="review-actions-section">
-            <h3 class="section-title" style="margin-bottom: 8px; font-size: 14px;">Your Review</h3>
-            <div class="review-actions">
-                <button class="review-action-btn approve-btn" data-action="approve" data-vote="10">
-                    <span class="btn-icon">✓</span>
-                    <span class="btn-text">Approve</span>
-                </button>
-                <button class="review-action-btn approve-suggestions-btn" data-action="approve-suggestions" data-vote="5">
-                    <span class="btn-icon">✓</span>
-                    <span class="btn-text">Approve with Suggestions</span>
-                </button>
-                <button class="review-action-btn waiting-btn" data-action="waiting" data-vote="-5">
-                    <span class="btn-icon">⏸</span>
-                    <span class="btn-text">Wait for Author</span>
-                </button>
-                <button class="review-action-btn reject-btn" data-action="reject" data-vote="-10">
-                    <span class="btn-icon">✗</span>
-                    <span class="btn-text">Reject</span>
-                </button>
-                <button class="review-action-btn reset-btn" data-action="reset" data-vote="0">
-                    <span class="btn-icon">↺</span>
-                    <span class="btn-text">Reset Vote</span>
-                </button>
-            </div>
-        </div>`;
-    }
+	private _getDescriptionHtml(descriptionHtml: string): string {
+		return (
+			'<div class="description-section">' +
+			'<h3 class="section-title" style="margin-bottom: 12px; font-size: 16px;">Description</h3>' +
+			'<div class="description">' +
+			descriptionHtml +
+			"</div>" +
+			"</div>"
+		);
+	}
 
-    private _getReviewersHtml(pr: PullRequest): string {
-        if (!pr.reviewers || pr.reviewers.length === 0) {
-            return `
-            <div class="reviewers-section">
-                <h3 class="section-title" style="margin-bottom: 8px; font-size: 14px;">Reviewers</h3>
-                <div class="empty-state">No reviewers assigned</div>
-            </div>`;
-        }
+	/**
+	 * Count the number of comments per file from PR threads
+	 * Only counts inline comments (those with specific line numbers)
+	 * File-level comments (without line numbers) are excluded and shown in Conversation tab
+	 * @param threads Array of PR threads
+	 * @returns Map of file path to comment count
+	 */
+	private _countCommentsPerFile(threads: PRThread[]): Map<string, number> {
+		const commentCounts = new Map<string, number>();
 
-        // Calculate vote counts
-        const approvedCount = pr.reviewers.filter((r) => r.vote === 10).length;
-        const approvedWithSuggestionsCount = pr.reviewers.filter((r) => r.vote === 5).length;
-        const rejectedCount = pr.reviewers.filter((r) => r.vote === -10).length;
-        const waitingCount = pr.reviewers.filter((r) => r.vote === 0).length;
+		for (const thread of threads) {
+			// Only count threads that have a file context and at least one comment
+			if (thread.threadContext?.filePath && thread.comments && thread.comments.length > 0) {
+				// Skip file-level comments (those without specific line positions)
+				// These should only appear in the Conversation tab
+				const hasLinePosition =
+					thread.threadContext.leftFileStart?.line || thread.threadContext.rightFileStart?.line;
+				if (!hasLinePosition) {
+					logger.debug(
+						`[PRViewerPanel] Excluding file-level comment (thread ${thread.id}) from file badge count`,
+					);
+					continue;
+				}
 
-        const reviewerItems = pr.reviewers
-            .map((reviewer) => {
-                let voteIcon = "○";
-                let voteClass = "vote-waiting";
-                let voteText = "No vote";
+				let filePath = thread.threadContext.filePath;
 
-                if (reviewer.vote === 10) {
-                    voteIcon = "✓";
-                    voteClass = "vote-approved";
-                    voteText = "Approved";
-                } else if (reviewer.vote === 5) {
-                    voteIcon = "✓";
-                    voteClass = "vote-approved-suggestions";
-                    voteText = "Approved with suggestions";
-                } else if (reviewer.vote === -5) {
-                    voteIcon = "⏸";
-                    voteClass = "vote-waiting-author";
-                    voteText = "Waiting for author";
-                } else if (reviewer.vote === -10) {
-                    voteIcon = "✗";
-                    voteClass = "vote-rejected";
-                    voteText = "Rejected";
-                }
+				// Normalize path - ensure it starts with /
+				if (!filePath.startsWith("/")) {
+					filePath = `/${filePath}`;
+				}
 
-                const requiredBadge = reviewer.isRequired
-                    ? '<span class="required-badge">Required</span>'
-                    : "";
+				const currentCount = commentCounts.get(filePath) || 0;
+				// Count all comments in the thread
+				commentCounts.set(filePath, currentCount + thread.comments.length);
+			}
+		}
 
-                return `
-                <div class="reviewer-item">
-                    <div class="reviewer-info">
-                        <span class="reviewer-name">${this._escapeHtml(reviewer.displayName || reviewer.uniqueName || "[Reviewer name unavailable]")}</span>
-                        ${requiredBadge}
-                    </div>
-                    <div class="reviewer-vote">
-                        <span class="vote-icon ${voteClass}">${voteIcon}</span>
-                        <span class="vote-text ${voteClass}">${voteText}</span>
-                    </div>
-                </div>`;
-            })
-            .join("");
+		logger.debug("[PRViewerPanel] Comment counts per file:", Object.fromEntries(commentCounts));
+		return commentCounts;
+	}
 
-        return `
-        <div class="reviewers-section">
-            <div class="reviewers-header">
-                <h3 class="section-title" style="font-size: 14px;">Reviewers (${pr.reviewers.length})</h3>
-                <div class="reviewer-counts">
-                    <span class="count-item vote-approved">✓ ${approvedCount + approvedWithSuggestionsCount}</span>
-                    <span class="count-separator">•</span>
-                    <span class="count-item vote-rejected">✗ ${rejectedCount}</span>
-                    <span class="count-separator">•</span>
-                    <span class="count-item vote-waiting">○ ${waitingCount}</span>
-                </div>
-            </div>
-            <div class="reviewer-list-detailed">
-                ${reviewerItems}
-            </div>
-        </div>`;
-    }
+	/**
+	 * Check if a thread is a vote notification (system-generated vote comment)
+	 */
+	private _isVoteNotification(thread: PRThread): boolean {
+		if (!thread.comments || thread.comments.length === 0) {
+			return false;
+		}
 
-    private _getDescriptionHtml(descriptionHtml: string): string {
-        return (
-            '<div class="description-section">' +
-            '<h3 class="section-title" style="margin-bottom: 12px; font-size: 16px;">Description</h3>' +
-            '<div class="description">' +
-            descriptionHtml +
-            "</div>" +
-            "</div>"
-        );
-    }
+		const firstComment = thread.comments[0];
+		const content = firstComment.content || "";
 
-    /**
-     * Count the number of comments per file from PR threads
-     * Only counts inline comments (those with specific line numbers)
-     * File-level comments (without line numbers) are excluded and shown in Conversation tab
-     * @param threads Array of PR threads
-     * @returns Map of file path to comment count
-     */
-    private _countCommentsPerFile(threads: PRThread[]): Map<string, number> {
-        const commentCounts = new Map<string, number>();
+		// Check for common vote notification patterns
+		const votePatterns = [
+			/voted\s+(-?\d+)/i, // "voted -5", "voted 10"
+			/changed\s+their\s+vote/i, // "changed their vote"
+			/reset\s+their\s+vote/i, // "reset their vote"
+		];
 
-        for (const thread of threads) {
-            // Only count threads that have a file context and at least one comment
-            if (thread.threadContext?.filePath && thread.comments && thread.comments.length > 0) {
-                // Skip file-level comments (those without specific line positions)
-                // These should only appear in the Conversation tab
-                const hasLinePosition = thread.threadContext.leftFileStart?.line || thread.threadContext.rightFileStart?.line;
-                if (!hasLinePosition) {
-                    console.log(`[PRViewerPanel] Excluding file-level comment (thread ${thread.id}) from file badge count`);
-                    continue;
-                }
+		return votePatterns.some((pattern) => pattern.test(content));
+	}
 
-                let filePath = thread.threadContext.filePath;
+	/**
+	 * Get HTML for general PR comments and file-level comments
+	 * Includes:
+	 * 1. Threads without a file path (general PR comments)
+	 * 2. Threads with a file path but no line numbers (file-level comments)
+	 */
+	private _getGeneralCommentsHtml(threads: PRThread[]): string {
+		// Filter for general comments (no file path) and file-level comments (has file path but no line number)
+		const generalThreads = threads.filter((thread) => {
+			// Exclude vote notifications
+			if (this._isVoteNotification(thread)) {
+				return false;
+			}
 
-                // Normalize path - ensure it starts with /
-                if (!filePath.startsWith('/')) {
-                    filePath = '/' + filePath;
-                }
+			// Include if no file path (general PR comment)
+			if (!thread.threadContext?.filePath) {
+				return true;
+			}
 
-                const currentCount = commentCounts.get(filePath) || 0;
-                // Count all comments in the thread
-                commentCounts.set(filePath, currentCount + thread.comments.length);
-            }
-        }
+			// Include if has file path but no line number (file-level comment)
+			const hasLinePosition =
+				thread.threadContext.leftFileStart?.line || thread.threadContext.rightFileStart?.line;
+			return !hasLinePosition;
+		});
 
-        console.log('[PRViewerPanel] Comment counts per file:', Object.fromEntries(commentCounts));
-        return commentCounts;
-    }
-
-    /**
-     * Check if a thread is a vote notification (system-generated vote comment)
-     */
-    private _isVoteNotification(thread: PRThread): boolean {
-        if (!thread.comments || thread.comments.length === 0) {
-            return false;
-        }
-
-        const firstComment = thread.comments[0];
-        const content = firstComment.content || "";
-
-        // Check for common vote notification patterns
-        const votePatterns = [
-            /voted\s+(-?\d+)/i,           // "voted -5", "voted 10"
-            /changed\s+their\s+vote/i,    // "changed their vote"
-            /reset\s+their\s+vote/i,      // "reset their vote"
-        ];
-
-        return votePatterns.some(pattern => pattern.test(content));
-    }
-
-    /**
-     * Get HTML for general PR comments and file-level comments
-     * Includes:
-     * 1. Threads without a file path (general PR comments)
-     * 2. Threads with a file path but no line numbers (file-level comments)
-     */
-    private _getGeneralCommentsHtml(threads: PRThread[]): string {
-        // Filter for general comments (no file path) and file-level comments (has file path but no line number)
-        const generalThreads = threads.filter((thread) => {
-            // Exclude vote notifications
-            if (this._isVoteNotification(thread)) {
-                return false;
-            }
-
-            // Include if no file path (general PR comment)
-            if (!thread.threadContext?.filePath) {
-                return true;
-            }
-
-            // Include if has file path but no line number (file-level comment)
-            const hasLinePosition = thread.threadContext.leftFileStart?.line || thread.threadContext.rightFileStart?.line;
-            return !hasLinePosition;
-        });
-
-        if (generalThreads.length === 0) {
-            return `
+		if (generalThreads.length === 0) {
+			return `
             <div class="general-comments-section">
                 <h3 class="section-title">General Comments</h3>
                 <div class="empty-state" style="padding: 30px 20px; text-align: center; background-color: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border); border-radius: 6px;">
                     No general comments on this PR
                 </div>
             </div>`;
-        }
+		}
 
-        // Sort threads by last updated date (newest first)
-        const sortedThreads = [...generalThreads].sort((a, b) =>
-            b.lastUpdatedDate.getTime() - a.lastUpdatedDate.getTime()
-        );
+		// Sort threads by last updated date (newest first)
+		const sortedThreads = [...generalThreads].sort(
+			(a, b) => b.lastUpdatedDate.getTime() - a.lastUpdatedDate.getTime(),
+		);
 
-        const threadItems = sortedThreads
-            .map((thread) => {
-                if (!thread.comments || thread.comments.length === 0) {
-                    return '';
-                }
+		const threadItems = sortedThreads
+			.map((thread) => {
+				if (!thread.comments || thread.comments.length === 0) {
+					return "";
+				}
 
-                const firstComment = thread.comments[0];
-                const authorName = firstComment.author?.displayName || "[Author name unavailable]";
-                const rawContent = firstComment.content || "[No content]";
-                const content = cleanCommentContent(rawContent);
-                const replyCount = thread.comments.length - 1;
+				const firstComment = thread.comments[0];
+				const authorName = firstComment.author?.displayName || "[Author name unavailable]";
+				const rawContent = firstComment.content || "[No content]";
+				const content = cleanCommentContent(rawContent);
+				const replyCount = thread.comments.length - 1;
 
-                // Get status info - only show badge for meaningful statuses
-                const statusLabel = getThreadStatusLabel(thread.status);
-                let statusBadge = '';
+				// Get status info - only show badge for meaningful statuses
+				const statusLabel = getThreadStatusLabel(thread.status);
+				let statusBadge = "";
 
-                // Only show status badges for specific non-active states
-                if (statusLabel !== "Active" && !statusLabel.startsWith("Unknown") && !statusLabel.startsWith("Not Set")) {
-                    const statusNum = typeof thread.status === 'string' ? Number.parseInt(thread.status, 10) : thread.status;
-                    let badgeClass = 'status-badge-unknown';
+				// Only show status badges for specific non-active states
+				if (
+					statusLabel !== "Active" &&
+					!statusLabel.startsWith("Unknown") &&
+					!statusLabel.startsWith("Not Set")
+				) {
+					const statusNum =
+						typeof thread.status === "string" ? Number.parseInt(thread.status, 10) : thread.status;
+					let badgeClass = "status-badge-unknown";
 
-                    if (statusNum === 2 || statusNum === 4) {
-                        badgeClass = 'status-badge-resolved';
-                    } else if (statusNum === 3 || statusNum === 5) {
-                        badgeClass = 'status-badge-wontfix';
-                    } else if (statusNum === 6) {
-                        badgeClass = 'status-badge-pending';
-                    }
+					if (statusNum === 2 || statusNum === 4) {
+						badgeClass = "status-badge-resolved";
+					} else if (statusNum === 3 || statusNum === 5) {
+						badgeClass = "status-badge-wontfix";
+					} else if (statusNum === 6) {
+						badgeClass = "status-badge-pending";
+					}
 
-                    statusBadge = `<span class="comment-status-badge ${badgeClass}">${this._escapeHtml(statusLabel)}</span>`;
-                }
+					statusBadge = `<span class="comment-status-badge ${badgeClass}">${this._escapeHtml(statusLabel)}</span>`;
+				}
 
-                const timeAgo = formatTimeAgo(thread.lastUpdatedDate);
+				const timeAgo = formatTimeAgo(thread.lastUpdatedDate);
 
-                // Build replies HTML
-                let repliesHtml = '';
-                if (replyCount > 0) {
-                    const replies = thread.comments.slice(1).map(comment => {
-                        const replyAuthor = comment.author?.displayName || "[Author name unavailable]";
-                        const rawReplyContent = comment.content || "[No content]";
-                        const replyContent = cleanCommentContent(rawReplyContent);
-                        const replyTime = formatTimeAgo(comment.publishedDate);
+				// Build replies HTML
+				let repliesHtml = "";
+				if (replyCount > 0) {
+					const replies = thread.comments
+						.slice(1)
+						.map((comment) => {
+							const replyAuthor = comment.author?.displayName || "[Author name unavailable]";
+							const rawReplyContent = comment.content || "[No content]";
+							const replyContent = cleanCommentContent(rawReplyContent);
+							const replyTime = formatTimeAgo(comment.publishedDate);
 
-                        return `
+							return `
                         <div class="comment-reply">
                             <div class="comment-reply-header">
                                 <span class="comment-author">${this._escapeHtml(replyAuthor)}</span>
@@ -2148,95 +2075,96 @@ export class PullRequestViewerPanel {
                             </div>
                             <div class="comment-body">${this._escapeHtml(replyContent)}</div>
                         </div>`;
-                    }).join('');
+						})
+						.join("");
 
-                    repliesHtml = `<div class="comment-replies">${replies}</div>`;
-                }
+					repliesHtml = `<div class="comment-replies">${replies}</div>`;
+				}
 
-                return `
+				return `
                 <div class="general-comment-thread">
                     <div class="comment-header">
                         <div class="comment-header-left">
                             <span class="comment-author">${this._escapeHtml(authorName)}</span>
                             <span class="comment-time">${timeAgo}</span>
                         </div>
-                        ${statusBadge ? `<div class="comment-header-right">${statusBadge}</div>` : ''}
+                        ${statusBadge ? `<div class="comment-header-right">${statusBadge}</div>` : ""}
                     </div>
                     <div class="comment-body">${this._escapeHtml(content)}</div>
                     ${repliesHtml}
                 </div>`;
-            })
-            .filter(html => html !== '')
-            .join('');
+			})
+			.filter((html) => html !== "")
+			.join("");
 
-        return `
+		return `
         <div class="general-comments-section">
             <h3 class="section-title">General Comments (${generalThreads.length})</h3>
             <div class="general-comments-list">
                 ${threadItems}
             </div>
         </div>`;
-    }
+	}
 
-
-    private _getFileChangesHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
-        if (fileChanges.length === 0) {
-            return `
+	private _getFileChangesHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
+		if (fileChanges.length === 0) {
+			return `
             <div class="file-changes-section">
                 <div class="empty-state" style="padding: 40px 20px; text-align: center;">No file changes available</div>
             </div>`;
-        }
+		}
 
-        // Count comments per file
-        const commentCounts = this._countCommentsPerFile(threads);
+		// Count comments per file
+		const commentCounts = this._countCommentsPerFile(threads);
 
-        const fileItems = fileChanges
-            .filter((change) => !change.item.isFolder)
-            .map((change, index) => {
-                let changeTypeClass = "change-edit";
-                let changeTypeText = "M";
+		const fileItems = fileChanges
+			.filter((change) => !change.item.isFolder)
+			.map((change, index) => {
+				let changeTypeClass = "change-edit";
+				let changeTypeText = "M";
 
-                if (change.changeType?.includes("add")) {
-                    changeTypeClass = "change-add";
-                    changeTypeText = "A";
-                } else if (change.changeType?.includes("delete")) {
-                    changeTypeClass = "change-delete";
-                    changeTypeText = "D";
-                } else if (change.changeType?.includes("rename")) {
-                    changeTypeClass = "change-rename";
-                    changeTypeText = "R";
-                }
+				if (change.changeType?.includes("add")) {
+					changeTypeClass = "change-add";
+					changeTypeText = "A";
+				} else if (change.changeType?.includes("delete")) {
+					changeTypeClass = "change-delete";
+					changeTypeText = "D";
+				} else if (change.changeType?.includes("rename")) {
+					changeTypeClass = "change-rename";
+					changeTypeText = "R";
+				}
 
-                // Extract filename and directory path
-                const fullPath = change.item?.path || '';
-                const pathParts = fullPath.split('/');
-                const fileName = pathParts.pop() || fullPath;
-                const dirPath = pathParts.join('/') || '/';
+				// Extract filename and directory path
+				const fullPath = change.item?.path || "";
+				const pathParts = fullPath.split("/");
+				const fileName = pathParts.pop() || fullPath;
+				const dirPath = pathParts.join("/") || "/";
 
-                // Handle rename case
-                let displayFileName = fileName;
-                let displayDirPath = dirPath;
+				// Handle rename case
+				let displayFileName = fileName;
+				const displayDirPath = dirPath;
 
-                if (change.changeType?.includes("rename") && change.originalPath) {
-                    const originalFileName = change.originalPath.split("/").pop() || change.originalPath;
-                    displayFileName = `${this._escapeHtml(originalFileName)} → ${this._escapeHtml(fileName)}`;
-                }
+				if (change.changeType?.includes("rename") && change.originalPath) {
+					const originalFileName = change.originalPath.split("/").pop() || change.originalPath;
+					displayFileName = `${this._escapeHtml(originalFileName)} → ${this._escapeHtml(fileName)}`;
+				}
 
-                // Normalize path for lookup - ensure it starts with /
-                let normalizedPath = change.item?.path || '';
-                if (!normalizedPath.startsWith('/')) {
-                    normalizedPath = `/${normalizedPath}`;
-                }
+				// Normalize path for lookup - ensure it starts with /
+				let normalizedPath = change.item?.path || "";
+				if (!normalizedPath.startsWith("/")) {
+					normalizedPath = `/${normalizedPath}`;
+				}
 
-                // Get comment count for this file
-                const commentCount = commentCounts.get(normalizedPath) || 0;
-                const commentSuffix = commentCount === 1 ? '' : 's';
-                const commentBadge = commentCount > 0
-                    ? `<span class="comment-count-badge" title="${commentCount} comment${commentSuffix}">💬 ${commentCount}</span>`
-                    : '';
+				// Get comment count for this file
+				const commentCount = commentCounts.get(normalizedPath) || 0;
+				const commentSuffix = commentCount === 1 ? "" : "s";
+				const commentBadge =
+					commentCount > 0
+						? `<span class="comment-count-badge" title="${commentCount} comment${commentSuffix}">💬 ${commentCount}</span>`
+						: "";
 
-                return `
-                <li class="file-item" data-file-path="${this._escapeHtml(change.item?.path)}" data-change-type="${this._escapeHtml(change.changeType)}" data-original-path="${this._escapeHtml(change.originalPath || '')}" data-file-index="${index}">
+				return `
+                <li class="file-item" data-file-path="${this._escapeHtml(change.item?.path)}" data-change-type="${this._escapeHtml(change.changeType)}" data-original-path="${this._escapeHtml(change.originalPath || "")}" data-file-index="${index}">
                     <span class="file-change-type ${changeTypeClass}">${changeTypeText}</span>
                     <div class="file-info">
                         <span class="file-name">${this._escapeHtml(displayFileName)}</span>
@@ -2244,19 +2172,19 @@ export class PullRequestViewerPanel {
                     </div>
                     ${commentBadge}
                 </li>`;
-            })
-            .join("");
+			})
+			.join("");
 
-        return `
+		return `
         <div class="file-changes-section">
             <ul class="file-list">
                 ${fileItems}
             </ul>
         </div>`;
-    }
+	}
 
-    private _getScripts(nonce: string): string {
-        return `
+	private _getScripts(nonce: string): string {
+		return `
         <script nonce="${nonce}">
             const vscode = acquireVsCodeApi();
 
@@ -2362,84 +2290,86 @@ export class PullRequestViewerPanel {
                 });
             });
         </script>`;
-    }
+	}
 
-    private _escapeHtml(text: string | null | undefined): string {
-        if (text == null) {
-            return "";
-        }
-        const map: { [key: string]: string } = {
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            '"': "&quot;",
-            "'": "&#039;",
-        };
-        return text.replaceAll(/[&<>"']/g, (m) => map[m]);
-    }
+	private _escapeHtml(text: string | null | undefined): string {
+		if (text == null) {
+			return "";
+		}
+		const map: { [key: string]: string } = {
+			"&": "&amp;",
+			"<": "&lt;",
+			">": "&gt;",
+			'"': "&quot;",
+			"'": "&#039;",
+		};
+		return text.replaceAll(/[&<>"']/g, (m) => map[m]);
+	}
 
-    /**
-     * Convert technical error messages to user-friendly messages
-     */
-    private _getFriendlyErrorMessage(error: unknown): string {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const lowerError = errorMessage.toLowerCase();
+	/**
+	 * Convert technical error messages to user-friendly messages
+	 */
+	private _getFriendlyErrorMessage(error: unknown): string {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		const lowerError = errorMessage.toLowerCase();
 
-        // Network and connection errors
-        if (lowerError.includes("fetch") && lowerError.includes("failed")) {
-            return "Unable to connect to Azure DevOps. Please check your network connection.";
-        }
-        if (lowerError.includes("timeout") || lowerError.includes("timed out")) {
-            return "The request took too long to complete. Please try again.";
-        }
-        if (lowerError.includes("network") || lowerError.includes("econnrefused")) {
-            return "Network error. Please check your connection and try again.";
-        }
+		// Network and connection errors
+		if (lowerError.includes("fetch") && lowerError.includes("failed")) {
+			return "Unable to connect to Azure DevOps. Please check your network connection.";
+		}
+		if (lowerError.includes("timeout") || lowerError.includes("timed out")) {
+			return "The request took too long to complete. Please try again.";
+		}
+		if (lowerError.includes("network") || lowerError.includes("econnrefused")) {
+			return "Network error. Please check your connection and try again.";
+		}
 
-        // Authentication errors
-        if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
-            return "Authentication failed. Please sign in to Azure DevOps and try again.";
-        }
-        if (lowerError.includes("403") || lowerError.includes("forbidden")) {
-            return "You don't have permission to access this pull request.";
-        }
+		// Authentication errors
+		if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
+			return "Authentication failed. Please sign in to Azure DevOps and try again.";
+		}
+		if (lowerError.includes("403") || lowerError.includes("forbidden")) {
+			return "You don't have permission to access this pull request.";
+		}
 
-        // Not found errors
-        if (lowerError.includes("404") || lowerError.includes("not found")) {
-            return "Pull request not found. It may have been deleted or you may not have access.";
-        }
+		// Not found errors
+		if (lowerError.includes("404") || lowerError.includes("not found")) {
+			return "Pull request not found. It may have been deleted or you may not have access.";
+		}
 
-        // Missing data errors
-        if (lowerError.includes("missing required") || lowerError.includes("repository") && lowerError.includes("project")) {
-            return "Unable to load pull request details. Some required information is missing.";
-        }
+		// Missing data errors
+		if (
+			lowerError.includes("missing required") ||
+			(lowerError.includes("repository") && lowerError.includes("project"))
+		) {
+			return "Unable to load pull request details. Some required information is missing.";
+		}
 
-        // Configuration errors
-        if (lowerError.includes("organization") || lowerError.includes("configuration")) {
-            return "Azure DevOps is not configured correctly. Please check your settings.";
-        }
+		// Configuration errors
+		if (lowerError.includes("organization") || lowerError.includes("configuration")) {
+			return "Azure DevOps is not configured correctly. Please check your settings.";
+		}
 
-        // Rate limiting
-        if (lowerError.includes("429") || lowerError.includes("rate limit")) {
-            return "Too many requests. Please wait a moment and try again.";
-        }
+		// Rate limiting
+		if (lowerError.includes("429") || lowerError.includes("rate limit")) {
+			return "Too many requests. Please wait a moment and try again.";
+		}
 
-        // Server errors
-        if (lowerError.includes("500") || lowerError.includes("502") || lowerError.includes("503")) {
-            return "Azure DevOps is experiencing issues. Please try again later.";
-        }
+		// Server errors
+		if (lowerError.includes("500") || lowerError.includes("502") || lowerError.includes("503")) {
+			return "Azure DevOps is experiencing issues. Please try again later.";
+		}
 
-        // Generic fallback
-        return "Unable to complete the request. Please try again.";
-    }
+		// Generic fallback
+		return "Unable to complete the request. Please try again.";
+	}
 }
 
 function getNonce() {
-    let text = "";
-    const possible =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+	let text = "";
+	const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+	for (let i = 0; i < 32; i++) {
+		text += possible.charAt(Math.floor(Math.random() * possible.length));
+	}
+	return text;
 }

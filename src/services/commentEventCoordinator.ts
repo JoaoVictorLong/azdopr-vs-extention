@@ -1,6 +1,9 @@
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 import type { PRCommentController } from "../providers/prCommentController";
+import { Logger } from "../utils/logger";
 import { PRContextManager } from "./prContextManager";
+
+const logger = Logger.getInstance();
 
 /**
  * Event coordinator for comment loading
@@ -18,25 +21,21 @@ export class CommentEventCoordinator {
 	private readonly debounceMs: number = 50;
 
 	constructor(private readonly commentController: PRCommentController) {
-		console.log("[CommentEventCoordinator] Initialized");
+		logger.debug("CommentEventCoordinator: Initialized");
 	}
 
 	/**
 	 * Handle document open event
 	 * Debounces to prevent duplicate loads when multiple events fire
 	 */
-	public async handleDocumentEvent(
-		document: vscode.TextDocument,
-	): Promise<void> {
+	public async handleDocumentEvent(document: vscode.TextDocument): Promise<void> {
 		if (document.uri.scheme !== "azdo-pr") {
 			return;
 		}
 
 		const key = document.uri.toString();
 
-		console.log(
-			`[CommentEventCoordinator] Document event for: ${document.uri.path}`,
-		);
+		logger.debug(`CommentEventCoordinator: Document event for: ${document.uri.path}`);
 
 		// Clear any existing debounce timer
 		if (this.debounceTimers.has(key)) {
@@ -52,10 +51,7 @@ export class CommentEventCoordinator {
 				await this.commentController.loadCommentsForDocument(document);
 				this.loadedDocuments.add(key);
 			} catch (error) {
-				console.error(
-					`[CommentEventCoordinator] Error loading comments:`,
-					error,
-				);
+				console.error(`[CommentEventCoordinator] Error loading comments:`, error);
 			}
 		}, this.debounceMs);
 
@@ -66,9 +62,7 @@ export class CommentEventCoordinator {
 	 * Handle editor change event
 	 * Only loads if document hasn't been loaded yet
 	 */
-	public async handleEditorChange(
-		editor: vscode.TextEditor | undefined,
-	): Promise<void> {
+	public async handleEditorChange(editor: vscode.TextEditor | undefined): Promise<void> {
 		if (!editor || editor.document.uri.scheme !== "azdo-pr") {
 			return;
 		}
@@ -76,19 +70,14 @@ export class CommentEventCoordinator {
 		const key = editor.document.uri.toString();
 
 		// Skip if already loaded or currently being loaded
-		if (
-			this.loadedDocuments.has(key) ||
-			this.debounceTimers.has(key)
-		) {
+		if (this.loadedDocuments.has(key) || this.debounceTimers.has(key)) {
 			console.log(
 				`[CommentEventCoordinator] Skipping editor change - already loaded/loading: ${editor.document.uri.path}`,
 			);
 			return;
 		}
 
-		console.log(
-			`[CommentEventCoordinator] Editor change for: ${editor.document.uri.path}`,
-		);
+		logger.debug(`CommentEventCoordinator: Editor change for: ${editor.document.uri.path}`);
 
 		// Load comments
 		await this.handleDocumentEvent(editor.document);
@@ -105,9 +94,7 @@ export class CommentEventCoordinator {
 
 		const key = document.uri.toString();
 
-		console.log(
-			`[CommentEventCoordinator] Document closed: ${document.uri.path}`,
-		);
+		logger.debug(`CommentEventCoordinator: Document closed: ${document.uri.path}`);
 
 		// Clear debounce timer if exists
 		if (this.debounceTimers.has(key)) {
@@ -125,10 +112,7 @@ export class CommentEventCoordinator {
 		try {
 			PRContextManager.getInstance().clearFileContext(document.uri);
 		} catch (error) {
-			console.warn(
-				`[CommentEventCoordinator] Failed to clear context:`,
-				error,
-			);
+			console.warn(`[CommentEventCoordinator] Failed to clear context:`, error);
 		}
 	}
 
@@ -136,7 +120,7 @@ export class CommentEventCoordinator {
 	 * Dispose of resources
 	 */
 	public dispose(): void {
-		console.log("[CommentEventCoordinator] Disposing");
+		logger.debug("CommentEventCoordinator: Disposing");
 
 		// Clear all debounce timers
 		for (const timer of this.debounceTimers.values()) {

@@ -1,29 +1,25 @@
 import * as vscode from "vscode";
-import type {
-	AzureDevOpsClient,
-	PullRequest,
-} from "../services/azureDevOpsClient";
 import type { AzureDevOpsAuthProvider } from "../auth/authProvider";
+import { MIN_REFRESH_INTERVAL_MS } from "../constants/cacheConfig";
+import type { AzureDevOpsClient, PullRequest } from "../services/azureDevOpsClient";
 
-export class PullRequestProvider
-	implements vscode.TreeDataProvider<PRTreeItem> {
+export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> {
 	private readonly _onDidChangeTreeData: vscode.EventEmitter<
-		PRTreeItem | undefined | null | void
-	> = new vscode.EventEmitter<PRTreeItem | undefined | null | void>();
-	readonly onDidChangeTreeData: vscode.Event<
-		PRTreeItem | undefined | null | void
-	> = this._onDidChangeTreeData.event;
+		PRTreeItem | undefined | null | undefined
+	> = new vscode.EventEmitter<PRTreeItem | undefined | null | undefined>();
+	readonly onDidChangeTreeData: vscode.Event<PRTreeItem | undefined | null | undefined> =
+		this._onDidChangeTreeData.event;
 
 	private pullRequests: PullRequest[] = [];
 	private hasInitialized = false;
 	private isRefreshing = false;
 	private lastRefreshTime: number = 0;
-	private readonly MIN_REFRESH_INTERVAL_MS = 5000; // Prevent refresh loops by limiting to once per 5 seconds
+	private readonly minRefreshIntervalMs = MIN_REFRESH_INTERVAL_MS;
 
 	constructor(
 		private readonly azureDevOpsClient: AzureDevOpsClient,
 		private readonly authProvider: AzureDevOpsAuthProvider,
-	) { }
+	) {}
 
 	initialize(): void {
 		this.hasInitialized = true;
@@ -31,7 +27,7 @@ export class PullRequestProvider
 	}
 
 	refresh(): void {
-		this._onDidChangeTreeData.fire();
+		this._onDidChangeTreeData.fire(undefined);
 	}
 
 	getTreeItem(element: PRTreeItem): vscode.TreeItem {
@@ -83,10 +79,7 @@ export class PullRequestProvider
 			title: "Sign In",
 			arguments: [],
 		};
-		signInItem.iconPath = new vscode.ThemeIcon(
-			"sign-in",
-			new vscode.ThemeColor("charts.blue"),
-		);
+		signInItem.iconPath = new vscode.ThemeIcon("sign-in", new vscode.ThemeColor("charts.blue"));
 		signInItem.contextValue = "signin";
 		signInItem.tooltip = new vscode.MarkdownString(
 			"**Sign in to Azure DevOps PR Viewer**\n\nClick to authenticate with your Microsoft account and view pull requests across your organization.",
@@ -103,7 +96,7 @@ export class PullRequestProvider
 				// This prevents infinite refresh loops
 				const now = Date.now();
 				const timeSinceLastRefresh = now - this.lastRefreshTime;
-				if (timeSinceLastRefresh > this.MIN_REFRESH_INTERVAL_MS) {
+				if (timeSinceLastRefresh > this.minRefreshIntervalMs) {
 					this.lastRefreshTime = now;
 					this.refreshInBackground();
 				}
@@ -115,30 +108,19 @@ export class PullRequestProvider
 			await this.fetchPullRequests();
 
 			if (this.pullRequests.length === 0) {
-				return [
-					new PRTreeItem(
-						"No pull requests found",
-						"",
-						vscode.TreeItemCollapsibleState.None,
-					),
-				];
+				return [new PRTreeItem("No pull requests found", "", vscode.TreeItemCollapsibleState.None)];
 			}
 
 			return this.getGroupedByProjectView();
 		} catch (error) {
 			const errorMessage =
 				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
-			return [
-				new PRTreeItem(
-					`Error: ${errorMessage}`,
-					"",
-					vscode.TreeItemCollapsibleState.None,
-				),
-			];
+			return [new PRTreeItem(`Error: ${errorMessage}`, "", vscode.TreeItemCollapsibleState.None)];
 		}
 	}
 
 	private refreshInBackground(): void {
+		this.isRefreshing = true;
 		this.fetchPullRequests()
 			.then(() => {
 				this.isRefreshing = false;
@@ -150,7 +132,6 @@ export class PullRequestProvider
 			.catch(() => {
 				this.isRefreshing = false;
 			});
-		this.isRefreshing = true;
 	}
 
 	private async fetchPullRequests(): Promise<void> {
@@ -165,16 +146,17 @@ export class PullRequestProvider
 			const projectName = pr.repository.project.name;
 			const repoName = pr.repository.name;
 
-			if (!projectMap.has(projectName)) {
-				projectMap.set(projectName, new Map());
+			let repoMap = projectMap.get(projectName);
+			if (!repoMap) {
+				repoMap = new Map();
+				projectMap.set(projectName, repoMap);
 			}
 
-			const repoMap = projectMap.get(projectName)!;
 			if (!repoMap.has(repoName)) {
 				repoMap.set(repoName, []);
 			}
 
-			repoMap.get(repoName)!.push(pr);
+			repoMap.get(repoName)?.push(pr);
 		}
 
 		// Create tree items
@@ -190,9 +172,7 @@ export class PullRequestProvider
 			let projectPRCount = 0;
 
 			// Sort repositories alphabetically
-			const sortedRepos = Array.from(repoMap.entries()).sort((a, b) =>
-				a[0].localeCompare(b[0]),
-			);
+			const sortedRepos = Array.from(repoMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
 			for (const [repoName, prs] of sortedRepos) {
 				projectPRCount += prs.length;
@@ -238,12 +218,7 @@ export class PullRequestProvider
 		const label = `${pr.title}`;
 		const description = `${pr.createdBy.displayName} • ${ageText}`;
 
-		const item = new PRTreeItem(
-			label,
-			description,
-			vscode.TreeItemCollapsibleState.None,
-			pr,
-		);
+		const item = new PRTreeItem(label, description, vscode.TreeItemCollapsibleState.None, pr);
 
 		// Set icon based on PR status
 		if (pr.isDraft) {
@@ -270,21 +245,14 @@ export class PullRequestProvider
 		return item;
 	}
 
-	private createTooltip(
-		pr: PullRequest,
-		ageText: string,
-	): vscode.MarkdownString {
+	private createTooltip(pr: PullRequest, ageText: string): vscode.MarkdownString {
 		const tooltip = new vscode.MarkdownString();
 		tooltip.appendMarkdown(`### ${pr.title}\n\n`);
 		tooltip.appendMarkdown(`**Project:** ${pr.repository.project.name}\n\n`);
 		tooltip.appendMarkdown(`**Repository:** ${pr.repository.name}\n\n`);
 		tooltip.appendMarkdown(`**Author:** ${pr.createdBy.displayName}\n\n`);
-		tooltip.appendMarkdown(
-			`**Created:** ${pr.creationDate.toLocaleString()} (${ageText})\n\n`,
-		);
-		tooltip.appendMarkdown(
-			`**Status:** ${pr.status}${pr.isDraft ? " (Draft)" : ""}\n\n`,
-		);
+		tooltip.appendMarkdown(`**Created:** ${pr.creationDate.toLocaleString()} (${ageText})\n\n`);
+		tooltip.appendMarkdown(`**Status:** ${pr.status}${pr.isDraft ? " (Draft)" : ""}\n\n`);
 		tooltip.appendMarkdown(
 			`**Source:** ${pr.sourceRefName ? pr.sourceRefName.replace("refs/heads/", "") : "unknown"}\n\n`,
 		);

@@ -34,9 +34,7 @@ export function formatTimeAgo(date: Date): string {
 /**
  * Get human-readable thread status label
  */
-export function getThreadStatusLabel(
-	status: string | number | undefined | null,
-): string {
+export function getThreadStatusLabel(status: string | number | undefined | null): string {
 	const statusMap: { [key: string]: string } = {
 		// Numeric values
 		"0": "Unknown",
@@ -89,7 +87,7 @@ export function getThreadStatusIcon(statusLabel: string): string {
  */
 export function cleanCommentContent(content: string): string {
 	// Remove GUID mentions like @<5B8B71B7-3EB7-6574-B377-A695965DBDA8>
-	let cleaned = content.replaceAll(/@<[A-F0-9-]+>/gi, "@user");
+	const cleaned = content.replaceAll(/@<[A-F0-9-]+>/gi, "@user");
 	return cleaned.trim();
 }
 
@@ -124,9 +122,7 @@ export function formatCommentHeaderMarkdown(
 	}
 
 	// Edited indicator
-	if (
-		comment.lastUpdatedDate.getTime() !== comment.publishedDate.getTime()
-	) {
+	if (comment.lastUpdatedDate.getTime() !== comment.publishedDate.getTime()) {
 		parts.push("*(edited)*");
 	}
 
@@ -146,14 +142,10 @@ export function formatCommentHeaderHtml(
 	const parts: string[] = [];
 
 	// Author
-	parts.push(
-		`<span class="comment-author">${escapeHtml(comment.author.displayName)}</span>`,
-	);
+	parts.push(`<span class="comment-author">${escapeHtml(comment.author.displayName)}</span>`);
 
 	// Time
-	parts.push(
-		`<span class="comment-time">${formatTimeAgo(comment.publishedDate)}</span>`,
-	);
+	parts.push(`<span class="comment-time">${formatTimeAgo(comment.publishedDate)}</span>`);
 
 	// Status badge (if requested and meaningful)
 	if (includeStatus && threadStatus !== undefined && threadStatus !== null) {
@@ -171,9 +163,7 @@ export function formatCommentHeaderHtml(
 	}
 
 	// Edited indicator
-	if (
-		comment.lastUpdatedDate.getTime() !== comment.publishedDate.getTime()
-	) {
+	if (comment.lastUpdatedDate.getTime() !== comment.publishedDate.getTime()) {
 		parts.push('<span class="comment-edited">(edited)</span>');
 	}
 
@@ -183,11 +173,8 @@ export function formatCommentHeaderHtml(
 /**
  * Get CSS class for status badge
  */
-function getStatusBadgeClass(
-	status: string | number | undefined | null,
-): string {
-	const statusNum =
-		typeof status === "string" ? Number.parseInt(status, 10) : status;
+function getStatusBadgeClass(status: string | number | undefined | null): string {
+	const statusNum = typeof status === "string" ? Number.parseInt(status, 10) : status;
 
 	if (statusNum === 2 || statusNum === 4) {
 		return "status-badge-resolved";
@@ -208,7 +195,7 @@ function getStatusBadgeClass(
 export function formatCommentAsMarkdown(
 	comment: PRComment,
 	thread?: PRThread,
-	organizationUrl?: string,
+	_organizationUrl?: string,
 ): vscode.MarkdownString {
 	const parts: string[] = [];
 
@@ -227,10 +214,10 @@ export function formatCommentAsMarkdown(
 		parts.push(""); // Blank line
 		parts.push("---");
 
-		const fileName = thread.threadContext.filePath.split("/").pop() || thread.threadContext.filePath;
+		const fileName =
+			thread.threadContext.filePath.split("/").pop() || thread.threadContext.filePath;
 		const lineNumber =
-			thread.threadContext.rightFileStart?.line ||
-			thread.threadContext.rightFileEnd?.line;
+			thread.threadContext.rightFileStart?.line || thread.threadContext.rightFileEnd?.line;
 
 		if (lineNumber) {
 			parts.push(`📄 ${fileName}:${lineNumber}`);
@@ -250,9 +237,7 @@ export function formatCommentAsMarkdown(
 /**
  * Format reply comments as markdown
  */
-export function formatRepliesAsMarkdown(
-	comments: PRComment[],
-): vscode.MarkdownString | undefined {
+export function formatRepliesAsMarkdown(comments: PRComment[]): vscode.MarkdownString | undefined {
 	if (comments.length <= 1) {
 		return undefined; // No replies
 	}

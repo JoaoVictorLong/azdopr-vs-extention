@@ -2,7 +2,7 @@
   "name": "azdopr",
   "displayName": "Azure DevOps PR Viewer",
   "description": "View all Pull Requests across your entire Azure DevOps organization in one place",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "publisher": "johncwaters",
   "repository": "https://github.com/johncwaters/azdopr",
   "icon": "resources/azdopr-icon.png",
@@ -206,7 +206,7 @@
     "package": "vite build --mode production",
     "vscode:prepublish": "npm run compile",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src",
+    "lint": "biome check src",
     "test": "vscode-test"
   },
   "devDependencies": {
