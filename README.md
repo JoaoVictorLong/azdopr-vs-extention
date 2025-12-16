@@ -54,34 +54,7 @@ See a problem or want to suggest something? Hover over any line and click the co
 
 ### View binary files (Git LFS support)
 
-The extension supports viewing binary files stored in Git LFS directly in VS Code:
-
-**Supported file types:**
-- PDF documents
-- More file types coming soon!
-
-**How it works:**
-1. Click any LFS-tracked file in the "Files Changed" tab
-2. The extension automatically detects LFS files
-3. Downloads the actual file content (not the pointer file)
-4. Opens in VS Code's built-in viewer
-
-**First-time viewing** may take a few seconds to download. **Subsequent views are instant** thanks to intelligent caching.
-
-**Troubleshooting:**
-- If a binary file doesn't load, try clicking the Refresh button
-- Check that Git LFS is enabled in your repository settings in Azure DevOps
-- Very large files (>50MB) may timeout - use the browser fallback option
-- To clear the cache: Open the command palette (Ctrl+Shift+P / Cmd+Shift+P) and run "Azure DevOps PR Viewer: Clear LFS File Cache"
-
-**Configuration:**
-```json
-{
-    "azureDevOpsPRViewer.lfs.enabled": true,
-    "azureDevOpsPRViewer.lfs.cacheSize": 500,  // Maximum cache size in MB
-    "azureDevOpsPRViewer.lfs.supportedTypes": ["pdf"]
-}
-```
+The extension includes experimental support for viewing Git LFS files (currently PDF documents). Click any LFS-tracked file in the "Files Changed" tab to view it directly in VS Code.
 
 ### Edit and manage comments
 
