@@ -18,6 +18,46 @@ let commentController: PRCommentController;
 let commentEventCoordinator: CommentEventCoordinator;
 
 /**
+ * Helper: Extract PullRequest from various command argument formats
+ *
+ * Commands can be invoked with different argument types:
+ * - Tree item click: { pullRequest: PullRequest }
+ * - Direct PR object: PullRequest
+ * - Legacy URL string: string
+ *
+ * @param arg - The command argument
+ * @returns PullRequest object or undefined
+ */
+function extractPullRequest(
+	arg: string | { pullRequest: PullRequest } | PullRequest | undefined,
+): PullRequest | undefined {
+	if (!arg || typeof arg === "string") {
+		return undefined;
+	}
+
+	if ("pullRequest" in arg) {
+		return arg.pullRequest;
+	}
+
+	if ("repository" in arg) {
+		return arg as PullRequest;
+	}
+
+	return undefined;
+}
+
+/**
+ * Helper: Build Azure DevOps PR URL
+ *
+ * @param pr - Pull request object
+ * @param organization - Azure DevOps organization name
+ * @returns Full URL to the PR in Azure DevOps web interface
+ */
+function buildPRUrl(pr: PullRequest, organization: string): string {
+	return `https://dev.azure.com/${organization}/${pr.repository.project.name}/_git/${pr.repository.name}/pullrequest/${pr.pullRequestId}`;
+}
+
+/**
  * Extension activation function
  *
  * ## Initialization Flow & Component Dependencies
@@ -125,54 +165,32 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand(
 			"azureDevOpsPRs.openPR",
 			async (arg: string | { pullRequest: PullRequest } | PullRequest | undefined) => {
-				let url: string | undefined;
-
+				// Handle legacy string URL format
 				if (typeof arg === "string") {
-					// Called with URL string (legacy)
-					url = arg;
+					await vscode.env.openExternal(vscode.Uri.parse(arg));
+					return;
 				}
 
-				if (arg && typeof arg === "object" && "pullRequest" in arg) {
-					// Called from context menu - arg is a tree item
-					const pr = arg.pullRequest;
-					const org = vscode.workspace
-						.getConfiguration("azureDevOpsPRViewer")
-						.get<string>("organization", "");
-					url = `https://dev.azure.com/${org}/${pr.repository.project.name}/_git/${pr.repository.name}/pullrequest/${pr.pullRequestId}`;
-				}
-
-				if (arg && typeof arg === "object" && "repository" in arg) {
-					// Called with PR object directly
-					const pr = arg;
-					const org = vscode.workspace
-						.getConfiguration("azureDevOpsPRViewer")
-						.get<string>("organization", "");
-					url = `https://dev.azure.com/${org}/${pr.repository.project.name}/_git/${pr.repository.name}/pullrequest/${pr.pullRequestId}`;
-				}
-
-				if (!url) {
+				// Extract PR from various argument formats
+				const pr = extractPullRequest(arg);
+				if (!pr) {
 					vscode.window.showErrorMessage("Unable to open PR: invalid argument");
 					return;
 				}
 
+				// Build URL and open in browser
+				const org = vscode.workspace
+					.getConfiguration("azureDevOpsPRViewer")
+					.get<string>("organization", "");
+				const url = buildPRUrl(pr, org);
 				await vscode.env.openExternal(vscode.Uri.parse(url));
 			},
 		),
 		vscode.commands.registerCommand(
 			"azureDevOpsPRs.viewPR",
 			async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
-				let pr: PullRequest | undefined;
-
-				if (arg && typeof arg === "object" && "pullRequest" in arg) {
-					// Called from context menu or tree item click - arg is a tree item
-					pr = arg.pullRequest;
-				}
-
-				if (arg && typeof arg === "object" && "repository" in arg) {
-					// Called with PR object directly
-					pr = arg;
-				}
-
+				// Extract PR from various argument formats
+				const pr = extractPullRequest(arg);
 				if (!pr) {
 					vscode.window.showErrorMessage("Unable to view PR: invalid argument");
 					return;

@@ -289,9 +289,38 @@ interface CacheEntry<T> {
 	ttl: number;
 }
 
+/**
+ * Azure DevOps REST API client
+ *
+ * ## Dual Caching Strategy
+ *
+ * This client uses TWO separate caching layers for different purposes:
+ *
+ * 1. **Short-term HTTP Response Cache** (this.cache - 1 minute TTL)
+ *    - Caches raw API responses to prevent duplicate HTTP calls
+ *    - Used by cachedFetch() method
+ *    - Helps when same API endpoint is called multiple times in quick succession
+ *    - Example: Multiple components requesting the same project list
+ *
+ * 2. **Medium-term PR Data Cache** (PRCacheService - 5 minute TTL)
+ *    - Caches high-level PR data structures (details, iterations, files, threads)
+ *    - Managed by PRCacheService singleton
+ *    - Used by PullRequestViewerPanel to avoid re-fetching entire PR data
+ *    - Example: User switches between PR files without re-fetching PR details
+ *
+ * **When to use which cache:**
+ * - Use this.cache: For individual API calls (projects, repos, file content)
+ * - Use PRCacheService: For complete PR data structures that are expensive to rebuild
+ */
 export class AzureDevOpsClient {
 	private readonly axiosInstance: AxiosInstance;
 	private organization: string = "";
+
+	/**
+	 * Short-term cache for individual API responses
+	 * TTL: 1 minute (configurable per-call)
+	 * Purpose: Prevent duplicate HTTP calls for the same endpoint
+	 */
 	private readonly cache = new Map<string, CacheEntry<unknown>>();
 
 	constructor(private readonly authProvider: AzureDevOpsAuthProvider) {

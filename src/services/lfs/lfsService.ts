@@ -308,17 +308,25 @@ export class LfsService {
 	/**
 	 * Download LFS file using local Git checkout (fallback method)
 	 *
-	 * This method is a fallback for when the API download fails.
-	 * It requires Git and Git LFS to be installed on the user's system.
+	 * **NOTE: This feature is not yet implemented.**
 	 *
-	 * NOTE: This is a placeholder for future implementation (Phase 4).
-	 * Currently throws an error indicating the feature is not yet implemented.
+	 * This would be a fallback when the Azure DevOps API download fails.
+	 * It would require Git and Git LFS to be installed on the user's system.
 	 *
-	 * @param projectId The Azure DevOps project ID
-	 * @param repositoryId The repository ID
-	 * @param repositoryName The repository name
-	 * @param path The file path
-	 * @param version The commit SHA or branch name
+	 * **Planned implementation:**
+	 * 1. Clone repository to temp directory
+	 * 2. Checkout specific commit
+	 * 3. Run `git lfs pull` for the specific file
+	 * 4. Read file content from disk
+	 * 5. Clean up temp directory
+	 *
+	 * **Current behavior:** Throws error indicating feature not available
+	 *
+	 * @param _projectId The Azure DevOps project ID
+	 * @param _repositoryId The repository ID
+	 * @param _repositoryName The repository name
+	 * @param _path The file path
+	 * @param _version The commit SHA or branch name
 	 * @returns Promise resolving to the file content as a Buffer
 	 * @throws Error indicating feature not implemented
 	 */
@@ -329,14 +337,6 @@ export class LfsService {
 		_path: string,
 		_version: string,
 	): Promise<Buffer> {
-		// This is a placeholder for Phase 4 (Local Checkout Fallback)
-		// Implementation would involve:
-		// 1. Clone repository to temp directory
-		// 2. Checkout specific commit
-		// 3. Run git lfs pull for this specific file
-		// 4. Read file content from disk
-		// 5. Return as Buffer
-
 		throw new Error(
 			"Local Git LFS checkout not yet implemented. " +
 				"Please ensure the file is accessible via Azure DevOps API.",
