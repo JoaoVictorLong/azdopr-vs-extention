@@ -17,6 +17,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	private isRefreshing = false;
 	private lastRefreshTime: number = 0;
 	private readonly minRefreshIntervalMs = MIN_REFRESH_INTERVAL_MS;
+	private currentUserId: string | null = null;
 
 	constructor(
 		private readonly azureDevOpsClient: AzureDevOpsClient,
@@ -25,6 +26,10 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 
 	initialize(): void {
 		this.hasInitialized = true;
+		// Fetch current user in background (don't block initialization)
+		this.fetchCurrentUser().catch(() => {
+			// Errors already handled in fetchCurrentUser
+		});
 		this.refresh();
 	}
 
@@ -229,7 +234,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 				);
 				repoItem.contextValue = "repository";
 				repoItem.children = prItems;
-				repoItem.iconPath = new vscode.ThemeIcon("repo");
+				repoItem.iconPath = new vscode.ThemeIcon("repo", new vscode.ThemeColor("charts.yellow"));
 
 				repoItems.push(repoItem);
 			}
@@ -241,7 +246,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			);
 			projectItem.contextValue = "project";
 			projectItem.children = repoItems;
-			projectItem.iconPath = new vscode.ThemeIcon("project");
+			projectItem.iconPath = new vscode.ThemeIcon("project", new vscode.ThemeColor("charts.purple"));
 
 			projectItems.push(projectItem);
 		}
@@ -253,18 +258,20 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		const ageInDays = this.getAgeInDays(pr.creationDate);
 		const ageText = this.formatAge(ageInDays);
 
-		const label = `${pr.title}`;
+		// Get status badges
+		const badges = this.getPRStatusBadges(pr);
+		const badgePrefix = badges.length > 0 ? `${badges.join(" ")} ` : "";
+
+		const label = `${badgePrefix}${pr.title}`;
 		const description = `${pr.createdBy.displayName} • ${ageText}`;
 
 		const item = new PRTreeItem(label, description, vscode.TreeItemCollapsibleState.None, pr);
 
 		// Set icon based on PR status
 		if (pr.isDraft) {
-			item.iconPath = new vscode.ThemeIcon("git-pull-request-draft");
-		}
-
-		if (!pr.isDraft) {
-			item.iconPath = new vscode.ThemeIcon("git-pull-request");
+			item.iconPath = new vscode.ThemeIcon("git-pull-request-draft", new vscode.ThemeColor("charts.gray"));
+		} else {
+			item.iconPath = new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.green"));
 		}
 
 		// Set context value for menu actions
@@ -286,6 +293,26 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	private createTooltip(pr: PullRequest, ageText: string): vscode.MarkdownString {
 		const tooltip = new vscode.MarkdownString();
 		tooltip.appendMarkdown(`### ${pr.title}\n\n`);
+
+		// Add badge explanations if present
+		const badges = this.getPRStatusBadges(pr);
+		if (badges.length > 0) {
+			tooltip.appendMarkdown("**Status:**\n");
+			if (badges.includes("✅")) {
+				tooltip.appendMarkdown("- ✅ You approved this PR\n");
+			}
+			if (badges.includes("❌")) {
+				tooltip.appendMarkdown("- ❌ You rejected this PR\n");
+			}
+			if (badges.includes("🚫")) {
+				tooltip.appendMarkdown("- 🚫 Blocked by reviewer rejection\n");
+			}
+			if (badges.includes("⏳")) {
+				tooltip.appendMarkdown("- ⏳ Waiting for author\n");
+			}
+			tooltip.appendMarkdown("\n");
+		}
+
 		tooltip.appendMarkdown(`**Project:** ${pr.repository.project.name}\n\n`);
 		tooltip.appendMarkdown(`**Repository:** ${pr.repository.name}\n\n`);
 		tooltip.appendMarkdown(`**Author:** ${pr.createdBy.displayName}\n\n`);
@@ -367,6 +394,54 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 
 		const months = Math.floor(days / 30);
 		return `${months} months ago`;
+	}
+
+	private async fetchCurrentUser(): Promise<void> {
+		try {
+			const user = await this.azureDevOpsClient.getCurrentUser();
+			this.currentUserId = user.uniqueName; // Use email for matching
+		} catch (error) {
+			// Log error but don't fail - badges just won't show
+			console.error("Failed to fetch current user:", error);
+			this.currentUserId = null;
+		}
+	}
+
+	private getPRStatusBadges(pr: PullRequest): string[] {
+		const badges: string[] = [];
+
+		if (!this.currentUserId) {
+			return badges;
+		}
+
+		// Check current user's review status
+		const myReview = pr.reviewers?.find((r) => r.uniqueName === this.currentUserId);
+		if (myReview) {
+			if (
+				myReview.vote === REVIEWER_VOTE.APPROVED ||
+				myReview.vote === REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS
+			) {
+				badges.push("✅"); // Green checkmark - you approved
+			} else if (myReview.vote === REVIEWER_VOTE.REJECTED) {
+				badges.push("❌"); // Red X - you rejected
+			}
+		}
+
+		// Check others' review status (excluding current user)
+		const othersReviews = pr.reviewers?.filter((r) => r.uniqueName !== this.currentUserId) || [];
+
+		const hasRejection = othersReviews.some((r) => r.vote === REVIEWER_VOTE.REJECTED);
+		const hasWaitingForAuthor = othersReviews.some(
+			(r) => r.vote === REVIEWER_VOTE.WAITING_FOR_AUTHOR,
+		);
+
+		if (hasRejection) {
+			badges.push("🚫"); // No entry sign - blocked by rejection
+		} else if (hasWaitingForAuthor) {
+			badges.push("⏳"); // Hourglass - waiting for author
+		}
+
+		return badges;
 	}
 }
 
