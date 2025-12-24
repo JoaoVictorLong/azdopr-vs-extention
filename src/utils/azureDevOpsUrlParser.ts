@@ -30,12 +30,12 @@ export class AzureDevOpsUrlParser {
 			return null;
 		}
 
-		// Security: Only accept Azure DevOps URLs
-		if (!remoteUrl.includes("dev.azure.com") && !remoteUrl.includes("visualstudio.com")) {
-			return null;
-		}
-
 		// Try HTTPS dev.azure.com format
+		// https://dev.azure.com/{org}/{project}/_git/{repo}
+		// https://{user}@dev.azure.com/{org}/{project}/_git/{repo}
+		const httpsDevMatch = remoteUrl.match(
+			/https:\/\/(?:.*@)?dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/\s]+)/,
+		);
 		// https://dev.azure.com/{org}/{project}/_git/{repo}
 		// https://{user}@dev.azure.com/{org}/{project}/_git/{repo}
 		const httpsDevMatch = remoteUrl.match(
