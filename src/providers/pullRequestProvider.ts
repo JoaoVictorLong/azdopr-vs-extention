@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import type { AzureDevOpsAuthProvider } from "../auth/authProvider";
+import { REVIEWER_VOTE } from "../constants/azureDevOpsConstants";
 import { MIN_REFRESH_INTERVAL_MS } from "../constants/cacheConfig";
 import type { AzureDevOpsClient, PullRequest } from "../services/azureDevOpsClient";
+import { formatErrorMessage } from "../utils/errorFormatter";
 
 export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> {
 	private readonly _onDidChangeTreeData: vscode.EventEmitter<
@@ -15,6 +17,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	private isRefreshing = false;
 	private lastRefreshTime: number = 0;
 	private readonly minRefreshIntervalMs = MIN_REFRESH_INTERVAL_MS;
+	private currentUserId: string | null = null;
 
 	constructor(
 		private readonly azureDevOpsClient: AzureDevOpsClient,
@@ -23,6 +26,10 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 
 	initialize(): void {
 		this.hasInitialized = true;
+		// Fetch current user in background (don't block initialization)
+		this.fetchCurrentUser().catch(() => {
+			// Errors already handled in fetchCurrentUser
+		});
 		this.refresh();
 	}
 
@@ -113,8 +120,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 
 			return this.getGroupedByProjectView();
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
+			const errorMessage = formatErrorMessage(error);
 			return [new PRTreeItem(`Error: ${errorMessage}`, "", vscode.TreeItemCollapsibleState.None)];
 		}
 	}
@@ -138,20 +144,57 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		this.pullRequests = await this.azureDevOpsClient.getAllPullRequests();
 	}
 
+	/**
+	 * Create hierarchical tree view grouped by Project → Repository → PRs
+	 *
+	 * ## Data Structure
+	 *
+	 * This method uses a nested Map structure to build the hierarchy:
+	 *
+	 * ```
+	 * Map<ProjectName, Map<RepositoryName, PullRequest[]>>
+	 *   │
+	 *   ├─ "MyProject" →  Map<RepoName, PR[]>
+	 *   │                  │
+	 *   │                  ├─ "frontend" → [PR #123, PR #124]
+	 *   │                  └─ "backend"  → [PR #125]
+	 *   │
+	 *   └─ "OtherProject" → Map<RepoName, PR[]>
+	 *                       └─ "api" → [PR #126, PR #127]
+	 * ```
+	 *
+	 * ## Sorting Strategy
+	 *
+	 * 1. **Projects**: Alphabetical by project name
+	 * 2. **Repositories**: Alphabetical by repository name (within each project)
+	 * 3. **Pull Requests**: By creation date, oldest first (within each repository)
+	 *
+	 * ## Tree Item Hierarchy
+	 *
+	 * ```
+	 * Projects (expanded by default)
+	 *   └─ Repositories (collapsed by default, show PR count)
+	 *        └─ Individual PRs (show title, author, age)
+	 * ```
+	 *
+	 * @returns Array of tree items representing the project hierarchy
+	 */
 	private getGroupedByProjectView(): PRTreeItem[] {
-		// Group PRs by project and repository
+		// Build nested Map: Project → Repository → PRs
 		const projectMap = new Map<string, Map<string, PullRequest[]>>();
 
 		for (const pr of this.pullRequests) {
 			const projectName = pr.repository.project.name;
 			const repoName = pr.repository.name;
 
+			// Get or create the repository map for this project
 			let repoMap = projectMap.get(projectName);
 			if (!repoMap) {
 				repoMap = new Map();
 				projectMap.set(projectName, repoMap);
 			}
 
+			// Get or create the PR array for this repository
 			if (!repoMap.has(repoName)) {
 				repoMap.set(repoName, []);
 			}
@@ -191,7 +234,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 				);
 				repoItem.contextValue = "repository";
 				repoItem.children = prItems;
-				repoItem.iconPath = new vscode.ThemeIcon("repo");
+				repoItem.iconPath = new vscode.ThemeIcon("repo", new vscode.ThemeColor("charts.yellow"));
 
 				repoItems.push(repoItem);
 			}
@@ -203,7 +246,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			);
 			projectItem.contextValue = "project";
 			projectItem.children = repoItems;
-			projectItem.iconPath = new vscode.ThemeIcon("project");
+			projectItem.iconPath = new vscode.ThemeIcon("project", new vscode.ThemeColor("charts.purple"));
 
 			projectItems.push(projectItem);
 		}
@@ -215,18 +258,20 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		const ageInDays = this.getAgeInDays(pr.creationDate);
 		const ageText = this.formatAge(ageInDays);
 
-		const label = `${pr.title}`;
+		// Get status badges
+		const badges = this.getPRStatusBadges(pr);
+		const badgePrefix = badges.length > 0 ? `${badges.join(" ")} ` : "";
+
+		const label = `${badgePrefix}${pr.title}`;
 		const description = `${pr.createdBy.displayName} • ${ageText}`;
 
 		const item = new PRTreeItem(label, description, vscode.TreeItemCollapsibleState.None, pr);
 
 		// Set icon based on PR status
 		if (pr.isDraft) {
-			item.iconPath = new vscode.ThemeIcon("git-pull-request-draft");
-		}
-
-		if (!pr.isDraft) {
-			item.iconPath = new vscode.ThemeIcon("git-pull-request");
+			item.iconPath = new vscode.ThemeIcon("git-pull-request-draft", new vscode.ThemeColor("charts.gray"));
+		} else {
+			item.iconPath = new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.green"));
 		}
 
 		// Set context value for menu actions
@@ -248,6 +293,26 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	private createTooltip(pr: PullRequest, ageText: string): vscode.MarkdownString {
 		const tooltip = new vscode.MarkdownString();
 		tooltip.appendMarkdown(`### ${pr.title}\n\n`);
+
+		// Add badge explanations if present
+		const badges = this.getPRStatusBadges(pr);
+		if (badges.length > 0) {
+			tooltip.appendMarkdown("**Status:**\n");
+			if (badges.includes("✅")) {
+				tooltip.appendMarkdown("- ✅ You approved this PR\n");
+			}
+			if (badges.includes("❌")) {
+				tooltip.appendMarkdown("- ❌ You rejected this PR\n");
+			}
+			if (badges.includes("🚫")) {
+				tooltip.appendMarkdown("- 🚫 Blocked by reviewer rejection\n");
+			}
+			if (badges.includes("⏳")) {
+				tooltip.appendMarkdown("- ⏳ Waiting for author\n");
+			}
+			tooltip.appendMarkdown("\n");
+		}
+
 		tooltip.appendMarkdown(`**Project:** ${pr.repository.project.name}\n\n`);
 		tooltip.appendMarkdown(`**Repository:** ${pr.repository.name}\n\n`);
 		tooltip.appendMarkdown(`**Author:** ${pr.createdBy.displayName}\n\n`);
@@ -280,15 +345,15 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 
 	private getVoteIcon(vote: number): string {
 		switch (vote) {
-			case 10:
+			case REVIEWER_VOTE.APPROVED:
 				return "✅"; // Approved
-			case 5:
+			case REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS:
 				return "👍"; // Approved with suggestions
-			case 0:
+			case REVIEWER_VOTE.NO_VOTE:
 				return "⏸️"; // No vote
-			case -5:
+			case REVIEWER_VOTE.WAITING_FOR_AUTHOR:
 				return "⏳"; // Waiting for author
-			case -10:
+			case REVIEWER_VOTE.REJECTED:
 				return "❌"; // Rejected
 			default:
 				return "❓";
@@ -329,6 +394,54 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 
 		const months = Math.floor(days / 30);
 		return `${months} months ago`;
+	}
+
+	private async fetchCurrentUser(): Promise<void> {
+		try {
+			const user = await this.azureDevOpsClient.getCurrentUser();
+			this.currentUserId = user.uniqueName; // Use email for matching
+		} catch (error) {
+			// Log error but don't fail - badges just won't show
+			console.error("Failed to fetch current user:", error);
+			this.currentUserId = null;
+		}
+	}
+
+	private getPRStatusBadges(pr: PullRequest): string[] {
+		const badges: string[] = [];
+
+		if (!this.currentUserId) {
+			return badges;
+		}
+
+		// Check current user's review status
+		const myReview = pr.reviewers?.find((r) => r.uniqueName === this.currentUserId);
+		if (myReview) {
+			if (
+				myReview.vote === REVIEWER_VOTE.APPROVED ||
+				myReview.vote === REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS
+			) {
+				badges.push("✅"); // Green checkmark - you approved
+			} else if (myReview.vote === REVIEWER_VOTE.REJECTED) {
+				badges.push("❌"); // Red X - you rejected
+			}
+		}
+
+		// Check others' review status (excluding current user)
+		const othersReviews = pr.reviewers?.filter((r) => r.uniqueName !== this.currentUserId) || [];
+
+		const hasRejection = othersReviews.some((r) => r.vote === REVIEWER_VOTE.REJECTED);
+		const hasWaitingForAuthor = othersReviews.some(
+			(r) => r.vote === REVIEWER_VOTE.WAITING_FOR_AUTHOR,
+		);
+
+		if (hasRejection) {
+			badges.push("🚫"); // No entry sign - blocked by rejection
+		} else if (hasWaitingForAuthor) {
+			badges.push("⏳"); // Hourglass - waiting for author
+		}
+
+		return badges;
 	}
 }
 

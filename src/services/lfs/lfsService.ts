@@ -27,11 +27,44 @@ export interface LfsPointerInfo {
 /**
  * Service for handling Git LFS files
  *
- * This service provides:
+ * ## Architecture: Extensible File Handler Registry Pattern
+ *
+ * This service uses a registry pattern to handle different file types:
+ *
+ * ```
+ * LfsService (coordinates)
+ *    ↓
+ * FileHandlerRegistry (dispatches to handlers)
+ *    ↓
+ * FileTypeHandler implementations:
+ *    ├─ PdfHandler (converts PDFs to data URIs for display)
+ *    ├─ ImageHandler (converts images to data URIs)
+ *    └─ FallbackBinaryHandler (base64 encode other binaries)
+ * ```
+ *
+ * **Adding a new file type:**
+ * 1. Create a handler class implementing FileTypeHandler interface
+ * 2. Register it in fileTypeHandlers.ts
+ * 3. Add the file extension to azureDevOpsPRViewer.lfs.supportedTypes config
+ *
+ * ## Data Flow
+ *
+ * 1. **Detection**: Check if file content is an LFS pointer (3-line format)
+ * 2. **Parsing**: Extract OID (SHA256 hash) and size from pointer
+ * 3. **Cache Check**: Look for already-downloaded file in LfsCache
+ * 4. **Download**: If not cached, use Azure DevOps API with `resolveLfs=true`
+ * 5. **Handler Dispatch**: FileHandlerRegistry selects handler based on file extension
+ * 6. **Processing**: Handler converts binary to displayable format (e.g., data URI)
+ * 7. **Caching**: Store processed result in LfsCache (500MB limit by default)
+ *
+ * ## Features
+ *
  * - Detection of LFS pointer files
  * - Parsing of LFS pointer metadata
  * - Downloading actual LFS file content via Azure DevOps API
  * - Caching of downloaded files for performance
+ * - Extensible file type handler system
+ * - Automatic cache size management
  * - Optional local checkout fallback (future enhancement)
  */
 export class LfsService {
@@ -275,17 +308,25 @@ export class LfsService {
 	/**
 	 * Download LFS file using local Git checkout (fallback method)
 	 *
-	 * This method is a fallback for when the API download fails.
-	 * It requires Git and Git LFS to be installed on the user's system.
+	 * **NOTE: This feature is not yet implemented.**
 	 *
-	 * NOTE: This is a placeholder for future implementation (Phase 4).
-	 * Currently throws an error indicating the feature is not yet implemented.
+	 * This would be a fallback when the Azure DevOps API download fails.
+	 * It would require Git and Git LFS to be installed on the user's system.
 	 *
-	 * @param projectId The Azure DevOps project ID
-	 * @param repositoryId The repository ID
-	 * @param repositoryName The repository name
-	 * @param path The file path
-	 * @param version The commit SHA or branch name
+	 * **Planned implementation:**
+	 * 1. Clone repository to temp directory
+	 * 2. Checkout specific commit
+	 * 3. Run `git lfs pull` for the specific file
+	 * 4. Read file content from disk
+	 * 5. Clean up temp directory
+	 *
+	 * **Current behavior:** Throws error indicating feature not available
+	 *
+	 * @param _projectId The Azure DevOps project ID
+	 * @param _repositoryId The repository ID
+	 * @param _repositoryName The repository name
+	 * @param _path The file path
+	 * @param _version The commit SHA or branch name
 	 * @returns Promise resolving to the file content as a Buffer
 	 * @throws Error indicating feature not implemented
 	 */
@@ -296,14 +337,6 @@ export class LfsService {
 		_path: string,
 		_version: string,
 	): Promise<Buffer> {
-		// This is a placeholder for Phase 4 (Local Checkout Fallback)
-		// Implementation would involve:
-		// 1. Clone repository to temp directory
-		// 2. Checkout specific commit
-		// 3. Run git lfs pull for this specific file
-		// 4. Read file content from disk
-		// 5. Return as Buffer
-
 		throw new Error(
 			"Local Git LFS checkout not yet implemented. " +
 				"Please ensure the file is accessible via Azure DevOps API.",

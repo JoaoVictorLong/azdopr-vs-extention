@@ -20,3 +20,9 @@ export const CACHE_CLEANUP_INTERVAL_MS = 60 * 1000;
  * Prevents refresh loops by limiting to once per interval
  */
 export const MIN_REFRESH_INTERVAL_MS = 5000;
+
+/**
+ * Debounce delay for comment loading operations in milliseconds (50ms)
+ * Prevents duplicate comment loads from rapid document open/switch events
+ */
+export const COMMENT_DEBOUNCE_MS = 50;

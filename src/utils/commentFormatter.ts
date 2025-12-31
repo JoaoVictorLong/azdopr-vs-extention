@@ -87,7 +87,7 @@ export function getThreadStatusIcon(statusLabel: string): string {
  */
 export function cleanCommentContent(content: string): string {
 	// Remove GUID mentions like @<5B8B71B7-3EB7-6574-B377-A695965DBDA8>
-	const cleaned = content.replaceAll(/@<[A-F0-9-]+>/gi, "@user");
+	const cleaned = content.replace(/@<[A-F0-9-]+>/gi, "@user");
 	return cleaned.trim();
 }
 

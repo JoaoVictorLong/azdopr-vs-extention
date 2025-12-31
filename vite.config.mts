@@ -23,7 +23,11 @@ export default defineConfig({
         "os",
         "node:fs",
         "node:path",
-        "node:os"
+        "node:os",
+        "node:assert",
+        "mocha",
+        "sinon",
+        "assert",
       ],
     },
     sourcemap: true,

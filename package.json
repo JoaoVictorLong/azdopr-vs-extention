@@ -81,6 +81,12 @@
         "command": "azureDevOpsPRs.clearLfsCache",
         "title": "Clear LFS File Cache",
         "category": "Azure DevOps PR Viewer"
+      },
+      {
+        "command": "azureDevOpsPRs.checkoutBranch",
+        "title": "Checkout Branch Locally",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(git-branch)"
       }
     ],
     "viewsContainers": {
@@ -109,7 +115,13 @@
           "group": "navigation@1"
         }
       ],
-      "view/item/context": [],
+      "view/item/context": [
+        {
+          "command": "azureDevOpsPRs.checkoutBranch",
+          "when": "view == azureDevOpsPRs && viewItem == pullrequest",
+          "group": "navigation"
+        }
+      ],
       "comments/commentThread/context": [
         {
           "command": "azdo-pr-comments.createOrReplyComment",
@@ -205,13 +217,16 @@
     }
   },
   "scripts": {
-    "compile": "vite build",
+    "compile": "npm run compile:extension && npm run compile:tests",
+    "compile:extension": "vite build",
+    "compile:tests": "tsc --project tsconfig.test.json",
     "watch": "vite build --watch",
     "package": "vite build --mode production",
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run compile:extension",
     "pretest": "npm run compile && npm run lint",
     "lint": "biome check src",
     "test": "vscode-test",
+    "prepare": "husky install",
     "release:patch": "npm version patch && git push origin master && git push --tags",
     "release:minor": "npm version minor && git push origin master && git push --tags",
     "release:major": "npm version major && git push origin master && git push --tags"
@@ -220,10 +235,15 @@
     "@biomejs/biome": "2.3.5",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
+    "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.105.0",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
+    "c8": "^10.1.3",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
     "patch-package": "^8.0.1",
+    "sinon": "^19.0.5",
     "typescript": "^5.9.3",
     "vite": "^7.2.2",
     "vite-plugin-static-copy": "^3.1.4"

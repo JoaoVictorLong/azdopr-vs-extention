@@ -14,12 +14,40 @@ export enum LogLevel {
  * Centralized logging service for the extension
  * Uses VS Code's Output Channel API for production-ready logging
  *
+ * This class implements the Singleton pattern to ensure a single Output Channel
+ * is shared across the entire extension, preventing multiple channel creation
+ * and ensuring consistent log formatting.
+ *
+ * ## Usage Guidelines
+ *
+ * **Use Logger for:**
+ * - Debug information (developer-facing, not shown to users by default)
+ * - Informational messages about extension operations
+ * - Warnings about potential issues
+ * - Errors with detailed stack traces for debugging
+ *
+ * **Use vscode.window.showErrorMessage/showInformationMessage for:**
+ * - User-facing notifications that require immediate attention
+ * - Success confirmations for user actions
+ * - Error messages that users need to see and understand
+ *
+ * **Best Practice:** Log to Logger first, then optionally show user notification
+ *
  * @example
  * ```typescript
  * const logger = Logger.getInstance();
- * logger.info("User signed in successfully");
- * logger.error("Failed to fetch PR details", error);
+ *
+ * // For debugging (developer-only, won't clutter user's screen)
  * logger.debug("Cache hit for PR #123");
+ * logger.info("User signed in successfully");
+ *
+ * // For errors (log first, then notify user)
+ * try {
+ *   await fetchData();
+ * } catch (error) {
+ *   logger.error("Failed to fetch data", error); // Logs with stack trace
+ *   vscode.window.showErrorMessage("Failed to fetch data"); // User notification
+ * }
  * ```
  */
 export class Logger {
@@ -33,6 +61,14 @@ export class Logger {
 
 	/**
 	 * Get the singleton instance of the logger
+	 *
+	 * The singleton pattern ensures:
+	 * - Only one Output Channel is created for the entire extension
+	 * - All logging goes to the same place for easier debugging
+	 * - Consistent log formatting across all components
+	 * - Shared log level configuration
+	 *
+	 * @returns The singleton Logger instance
 	 */
 	public static getInstance(): Logger {
 		if (!Logger._instance) {

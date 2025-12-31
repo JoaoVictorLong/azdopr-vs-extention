@@ -15,6 +15,37 @@ interface CachedPRData {
 /**
  * Service for caching PR details to reduce API calls
  * Implements a short-term cache with configurable TTL
+ *
+ * This class uses the Singleton pattern to ensure a single shared cache
+ * exists across the entire extension. This is critical because:
+ * - Prevents duplicate API calls from different components
+ * - Ensures cache consistency across all PR-related operations
+ * - Manages a single cleanup interval instead of multiple competing timers
+ * - Provides centralized cache statistics and debugging
+ *
+ * ## Cache Strategy
+ * - **TTL**: 5 minutes (PR_CACHE_TTL_MS) for PR details, iterations, files, and threads
+ * - **Cleanup**: Runs every 1 minute to remove expired entries
+ * - **Invalidation**: Supports per-PR and per-repository invalidation
+ *
+ * ## Related Caching
+ * Note: AzureDevOpsClient also has its own short-term (1 min) HTTP response cache
+ * for individual API calls. PRCacheService caches higher-level PR data structures.
+ *
+ * @example
+ * ```typescript
+ * const cache = PRCacheService.getInstance();
+ *
+ * // Try to get from cache first
+ * const cached = cache.get(projectId, repoId, prId);
+ * if (cached) {
+ *   return cached.fullDetails;
+ * }
+ *
+ * // Fetch from API and cache
+ * const prData = await fetchFromAPI();
+ * cache.set(projectId, repoId, prId, ...prData);
+ * ```
  */
 export class PRCacheService {
 	private static _instance: PRCacheService | undefined;
@@ -22,13 +53,21 @@ export class PRCacheService {
 	private readonly defaultTTL: number = PR_CACHE_TTL_MS;
 
 	private constructor() {
-		// Private constructor to enforce singleton pattern
+		// Private constructor enforces singleton pattern
 		// Start cleanup interval to remove expired entries
 		this.startCleanupInterval();
 	}
 
 	/**
 	 * Get the singleton instance of PRCacheService
+	 *
+	 * The singleton pattern ensures:
+	 * - Only one cache exists across the entire extension
+	 * - All components share the same cached data
+	 * - Single cleanup timer instead of multiple
+	 * - Consistent cache behavior everywhere
+	 *
+	 * @returns The singleton PRCacheService instance
 	 */
 	public static getInstance(): PRCacheService {
 		if (!PRCacheService._instance) {

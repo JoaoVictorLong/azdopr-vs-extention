@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { THREAD_STATUS } from "../constants/azureDevOpsConstants";
 import type { PRComment, PRThread } from "../services/azureDevOpsClient";
 import { getThreadStatusLabel } from "../utils/commentFormatter";
 import { Logger } from "../utils/logger";
@@ -143,7 +144,7 @@ export class CommentThreadManager {
 				organizationUrl,
 				currentUserId,
 			);
-			console.log(
+			logger.debug(
 				`[ThreadManager] Updated thread ${thread.threadId}: comment count changed ${existingComments.length} -> ${newServerComments.length}`,
 			);
 			return true;
@@ -213,23 +214,68 @@ export class CommentThreadManager {
 	}
 
 	/**
-	 * Update thread status and state
+	 * Get unique contributors from thread comments
+	 * Returns a formatted string like "Participants: Alice, Bob, Charlie"
 	 */
-	public updateThreadStatus(thread: AzDOCommentThread, status: string | number): void {
+	private getThreadContributors(comments: PRComment[]): string {
+		if (comments.length === 0) {
+			return "";
+		}
+
+		// Get unique author display names
+		const uniqueAuthors = new Set<string>();
+		for (const comment of comments) {
+			uniqueAuthors.add(comment.author.displayName);
+		}
+
+		// Convert to array and join
+		const authors = Array.from(uniqueAuthors);
+
+		// Format based on count
+		let authorList: string;
+		if (authors.length === 1) {
+			authorList = authors[0];
+		} else if (authors.length === 2) {
+			authorList = `${authors[0]} and ${authors[1]}`;
+		} else if (authors.length <= 4) {
+			authorList = authors.join(", ");
+		} else {
+			// Show first 3 and count the rest
+			const shown = authors.slice(0, 3).join(", ");
+			const remaining = authors.length - 3;
+			authorList = `${shown}, and ${remaining} other${remaining > 1 ? "s" : ""}`;
+		}
+
+		// Add label prefix
+		return `Participants: ${authorList}`;
+	}
+
+	/**
+	 * Update thread status, state, and label
+	 * For active threads, shows contributors; for non-active threads, shows status
+	 */
+	public updateThreadStatus(
+		thread: AzDOCommentThread,
+		status: string | number,
+		serverComments?: PRComment[],
+	): void {
 		const statusNum = typeof status === "string" ? Number.parseInt(status, 10) : status;
 
 		// Set thread state based on status
-		// Status 2 = Resolved, Status 4 = Closed
-		if (statusNum === 2 || statusNum === 4) {
+		if (statusNum === THREAD_STATUS.RESOLVED || statusNum === THREAD_STATUS.CLOSED) {
 			thread.state = vscode.CommentThreadState.Resolved;
 		} else {
 			thread.state = vscode.CommentThreadState.Unresolved;
 		}
 
-		// Update label
+		// Update label - prioritize status labels for non-active threads
 		const statusLabel = getThreadStatusLabel(status);
 		if (statusLabel && statusLabel !== "Active" && !statusLabel.startsWith("[Status:")) {
 			thread.label = statusLabel;
+		} else if (serverComments) {
+			// For active threads, show contributors
+			const contributors = this.getThreadContributors(serverComments);
+			thread.label = contributors || undefined;
 		} else {
 			thread.label = undefined;
 		}
@@ -259,7 +305,7 @@ export class CommentThreadManager {
 			const newComments = [...thread.comments];
 			newComments[index] = realComment;
 			thread.comments = newComments;
-			console.log(
+			logger.debug(
 				`[ThreadManager] Replaced temporary comment ${tempId} in thread ${thread.threadId}`,
 			);
 		}
@@ -272,14 +318,56 @@ export class CommentThreadManager {
 		thread.comments = thread.comments.filter(
 			(c) => !(c instanceof TemporaryComment && c.tempId === tempId),
 		);
-		console.log(
+		logger.debug(
 			`[ThreadManager] Removed temporary comment ${tempId} from thread ${thread.threadId}`,
 		);
 	}
 
 	/**
-	 * Sync threads with server data
-	 * Only creates/disposes threads that actually changed
+	 * Sync comment threads with server data using differential updates
+	 *
+	 * This method implements a sophisticated differential update algorithm that prevents
+	 * the "flickering" problem common in comment systems. Instead of disposing and recreating
+	 * all threads on every update, it only modifies threads that have actually changed.
+	 *
+	 * ## Why Differential Updates Matter
+	 *
+	 * The naive approach of "dispose all, recreate all" causes:
+	 * - Visual flickering as threads disappear and reappear
+	 * - Loss of user's scroll position
+	 * - Interruption of user interactions (editing, replying)
+	 * - Poor performance with many threads
+	 *
+	 * ## Algorithm Overview
+	 *
+	 * 1. **Identify Stale Threads**: Find local threads that no longer exist on server → dispose them
+	 * 2. **Update Existing Threads**: For threads that exist both locally and on server → update in-place
+	 * 3. **Create New Threads**: For threads on server but not local → create them
+	 *
+	 * ## Side-Based Filtering (Prevents Duplicates)
+	 *
+	 * When viewing a diff, the same comment thread can appear on both:
+	 * - **Base side** (left, original file) - uses `leftFileStart`
+	 * - **Modified side** (right, new file) - uses `rightFileStart`
+	 *
+	 * To prevent showing the same comment twice, we:
+	 * - Check which side we're syncing (`side` parameter)
+	 * - Only show threads that have line numbers for that specific side
+	 * - Skip threads with no line number OR line number < 1 (file-level comments)
+	 *
+	 * ## Edge Cases Handled
+	 *
+	 * - **Out of bounds lines**: Thread references line 100 but document only has 50 lines → skip
+	 * - **File-level comments**: Comments not attached to specific lines → skip
+	 * - **Missing line context**: Thread exists but has no line number → skip
+	 * - **Deleted threads**: Thread exists locally but not on server → dispose
+	 *
+	 * @param document - The VS Code document to sync threads for
+	 * @param serverThreads - Latest thread data from Azure DevOps API
+	 * @param side - Which side of the diff: "base" (left/original) or "modified" (right/new)
+	 * @param prContext - Pull request context (project, repo, PR IDs)
+	 * @param organizationUrl - Azure DevOps organization URL for profile images
+	 * @param currentUserId - Current user's ID for permission checks
 	 */
 	public syncThreads(
 		document: vscode.TextDocument,
@@ -333,7 +421,7 @@ export class CommentThreadManager {
 			// Convert to 0-based and check bounds
 			const zeroBasedLine = lineNumber - 1;
 			if (zeroBasedLine >= document.lineCount) {
-				console.log(
+				logger.debug(
 					`[ThreadManager] Skipping thread ${serverThread.id}: line ${lineNumber} out of bounds`,
 				);
 				continue;
@@ -347,8 +435,8 @@ export class CommentThreadManager {
 			// Update comments differentially
 			this.updateThreadComments(thread, serverThread.comments, organizationUrl, currentUserId);
 
-			// Update status
-			this.updateThreadStatus(thread, serverThread.status);
+			// Update status and label (label shows contributors for active threads)
+			this.updateThreadStatus(thread, serverThread.status, serverThread.comments);
 		}
 	}
 

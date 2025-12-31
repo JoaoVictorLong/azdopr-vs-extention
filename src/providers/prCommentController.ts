@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
+import { THREAD_STATUS } from "../constants/azureDevOpsConstants";
+import { COMMENT_DEBOUNCE_MS } from "../constants/cacheConfig";
 import type { AzureDevOpsClient, PRThread } from "../services/azureDevOpsClient";
 import { PRContextManager } from "../services/prContextManager";
 import { type AuthorInfo, type AzDOComment, TemporaryComment } from "../types/comments";
 import { type AzDOCommentThread, CommentThreadManager } from "../types/commentThread";
+import { formatErrorWithPrefix } from "../utils/errorFormatter";
 import { Logger } from "../utils/logger";
 
 const logger = Logger.getInstance();
@@ -173,7 +176,7 @@ export class PRCommentController {
 			setTimeout(async () => {
 				this.debounceTimers.delete(uriString);
 				await this.loadCommentsNow(document);
-			}, 50), // 50ms debounce
+			}, COMMENT_DEBOUNCE_MS),
 		);
 	}
 
@@ -264,9 +267,7 @@ export class PRCommentController {
 			logger.info(`PRCommentController: Successfully synced ${fileThreads.length} threads`);
 		} catch (error) {
 			logger.error("PRCommentController: Failed to load comments", error);
-			vscode.window.showErrorMessage(
-				`Failed to load comments: ${error instanceof Error ? error.message : String(error)}`,
-			);
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to load comments", error));
 		}
 	}
 
@@ -287,7 +288,20 @@ export class PRCommentController {
 	}
 
 	/**
-	 * Normalize file path for comparison
+	 * Normalize file paths for consistent comparison across platforms
+	 *
+	 * Azure DevOps API returns paths in various formats depending on context:
+	 * - Thread context: `/src/file.ts` (leading slash)
+	 * - File changes: `src/file.ts` (no leading slash)
+	 * - Windows paths: `src\file.ts` (backslashes)
+	 *
+	 * This method normalizes all paths to a canonical format for reliable matching:
+	 * 1. Remove leading slashes
+	 * 2. Convert backslashes to forward slashes (Windows → Unix style)
+	 * 3. Convert to lowercase (case-insensitive comparison)
+	 *
+	 * @param path - The file path to normalize
+	 * @returns Normalized path in format: `src/file.ts` (lowercase, forward slashes, no leading slash)
 	 */
 	private normalizePath(path: string): string {
 		return path.replace(/^\/+/, "").replaceAll("\\", "/").toLowerCase();
@@ -446,15 +460,11 @@ export class PRCommentController {
 				// Remove temporary comment on error
 				this.threadManager.removeTemporaryComment(azdoThread, tempComment.tempId);
 
-				const errorMessage =
-					error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
-				vscode.window.showErrorMessage(`Failed to add comment: ${errorMessage}`);
+				vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to add comment", error));
 				logger.error("Error adding comment", error);
 			}
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
-			vscode.window.showErrorMessage(`Failed to add comment: ${errorMessage}`);
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to add comment", error));
 			logger.error("Error in handleCommentSubmit", error);
 		}
 	}
@@ -513,9 +523,7 @@ export class PRCommentController {
 
 			vscode.window.showInformationMessage("Comment updated successfully");
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
-			vscode.window.showErrorMessage(`Failed to edit comment: ${errorMessage}`);
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to edit comment", error));
 			logger.error("Error editing comment", error);
 		}
 	}
@@ -571,9 +579,7 @@ export class PRCommentController {
 
 			vscode.window.showInformationMessage("Comment deleted successfully");
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
-			vscode.window.showErrorMessage(`Failed to delete comment: ${errorMessage}`);
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to delete comment", error));
 			logger.error("Error deleting comment", error);
 		}
 	}
@@ -601,19 +607,17 @@ export class PRCommentController {
 						azdoThread.prContext.repositoryId,
 						azdoThread.prContext.pullRequestId,
 						azdoThread.threadId,
-						2, // Status 2 = Resolved
+						THREAD_STATUS.RESOLVED,
 					);
 				},
 			);
 
 			// Update thread state locally
-			this.threadManager.updateThreadStatus(azdoThread, 2);
+			this.threadManager.updateThreadStatus(azdoThread, THREAD_STATUS.RESOLVED);
 
 			vscode.window.showInformationMessage("Thread resolved successfully");
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
-			vscode.window.showErrorMessage(`Failed to resolve thread: ${errorMessage}`);
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to resolve thread", error));
 			logger.error("Error resolving thread", error);
 		}
 	}
@@ -641,19 +645,17 @@ export class PRCommentController {
 						azdoThread.prContext.repositoryId,
 						azdoThread.prContext.pullRequestId,
 						azdoThread.threadId,
-						1, // Status 1 = Active
+						THREAD_STATUS.ACTIVE,
 					);
 				},
 			);
 
 			// Update thread state locally
-			this.threadManager.updateThreadStatus(azdoThread, 1);
+			this.threadManager.updateThreadStatus(azdoThread, THREAD_STATUS.ACTIVE);
 
 			vscode.window.showInformationMessage("Thread unresolved successfully");
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : `[Non-Error type thrown: ${typeof error}]`;
-			vscode.window.showErrorMessage(`Failed to unresolve thread: ${errorMessage}`);
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to unresolve thread", error));
 			logger.error("Error unresolving thread", error);
 		}
 	}

@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
 import { AzureDevOpsAuthProvider } from "./auth/authProvider";
+import { CheckoutBranchCommandHandler } from "./commands/checkoutBranchCommand";
 import { PRCommentController } from "./providers/prCommentController";
 import { PullRequestProvider } from "./providers/pullRequestProvider";
 import { AzureDevOpsClient, type PullRequest } from "./services/azureDevOpsClient";
 import { CommentEventCoordinator } from "./services/commentEventCoordinator";
+import { GitService } from "./services/gitService";
 import { LfsCache } from "./services/lfs/lfsCache";
+import { RepositoryMatchingService } from "./services/repositoryMatchingService";
 import { ReviewedFilesService } from "./services/reviewedFilesService";
 import { Logger } from "./utils/logger";
 import { PullRequestViewerPanel } from "./views/pullRequestViewerPanel";
@@ -17,12 +20,92 @@ let refreshInterval: NodeJS.Timeout | undefined;
 let azureDevOpsClient: AzureDevOpsClient;
 let commentController: PRCommentController;
 let commentEventCoordinator: CommentEventCoordinator;
-let reviewedFilesService: ReviewedFilesService;
 
+/**
+ * Helper: Extract PullRequest from various command argument formats
+ *
+ * Commands can be invoked with different argument types:
+ * - Tree item click: { pullRequest: PullRequest }
+ * - Direct PR object: PullRequest
+ * - Legacy URL string: string
+ *
+ * @param arg - The command argument
+ * @returns PullRequest object or undefined
+ */
+function extractPullRequest(
+	arg: string | { pullRequest: PullRequest } | PullRequest | undefined,
+): PullRequest | undefined {
+	if (!arg || typeof arg === "string") {
+		return undefined;
+	}
+
+	if ("pullRequest" in arg) {
+		return arg.pullRequest;
+	}
+
+	if ("repository" in arg) {
+		return arg as PullRequest;
+	}
+
+	return undefined;
+}
+
+/**
+ * Helper: Build Azure DevOps PR URL
+ *
+ * @param pr - Pull request object
+ * @param organization - Azure DevOps organization name
+ * @returns Full URL to the PR in Azure DevOps web interface
+ */
+function buildPRUrl(pr: PullRequest, organization: string): string {
+	return `https://dev.azure.com/${organization}/${pr.repository.project.name}/_git/${pr.repository.name}/pullrequest/${pr.pullRequestId}`;
+}
+
+/**
+ * Extension activation function
+ *
+ * ## Initialization Flow & Component Dependencies
+ *
+ * The components must be initialized in this specific order due to dependencies:
+ *
+ * ```
+ * 1. Authentication Provider (no dependencies)
+ *    ↓
+ * 2. Azure DevOps Client (depends on: Auth Provider)
+ *    ↓
+ * 3. Pull Request Provider (depends on: Client, Auth Provider)
+ *    ├─ Register Tree View
+ *    ↓
+ * 4. Comment Controller (depends on: Client)
+ *    ├─ Initialize asynchronously (non-blocking)
+ *    ↓
+ * 5. Comment Event Coordinator (depends on: Comment Controller)
+ *    ├─ Handles document open/close events
+ *    ├─ Debounces comment loading
+ *    ↓
+ * 6. Register Commands (depends on: all above components)
+ *    ├─ Sign in/out
+ *    ├─ Refresh PRs
+ *    ├─ View/Open PRs
+ *    ├─ Comment operations
+ *    ├─ LFS cache management
+ *    ↓
+ * 7. Setup Auto-refresh (optional, based on config)
+ * ```
+ *
+ * ## Critical Notes
+ *
+ * - **Comment Controller** is initialized asynchronously to avoid blocking extension activation
+ * - **Event Coordinator** must be initialized AFTER Comment Controller to handle document events
+ * - **Auto-refresh** setup happens last since it depends on PR Provider being fully initialized
+ * - All disposables are collected in context.subscriptions for proper cleanup
+ *
+ * @param context - VS Code extension context for managing lifecycle
+ */
 export async function activate(context: vscode.ExtensionContext) {
 	logger.info("Azure DevOps PR Viewer extension is now active");
 
-	// Initialize authentication provider
+	// Step 1: Initialize authentication provider
 	authProvider = new AzureDevOpsAuthProvider();
 
 	// Set initial authentication context
@@ -59,6 +142,21 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Initialize reviewed files service
 	reviewedFilesService = ReviewedFilesService.getInstance(context);
 
+	// Initialize Git services for branch checkout
+	const gitService = new GitService();
+	const gitAvailable = await gitService.initialize();
+
+	if (!gitAvailable) {
+		logger.warn("Git extension not available - checkout features disabled");
+	}
+
+	const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
+	const organization = config.get<string>("organization", "");
+
+	const repositoryMatchingService = new RepositoryMatchingService(gitService, organization);
+
+	const checkoutHandler = new CheckoutBranchCommandHandler(gitService, repositoryMatchingService);
+
 	// Collect all subscriptions
 	const subscriptions = [
 		vscode.commands.registerCommand("azureDevOpsPRs.refreshComments", async () => {
@@ -89,54 +187,32 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand(
 			"azureDevOpsPRs.openPR",
 			async (arg: string | { pullRequest: PullRequest } | PullRequest | undefined) => {
-				let url: string | undefined;
-
+				// Handle legacy string URL format
 				if (typeof arg === "string") {
-					// Called with URL string (legacy)
-					url = arg;
+					await vscode.env.openExternal(vscode.Uri.parse(arg));
+					return;
 				}
 
-				if (arg && typeof arg === "object" && "pullRequest" in arg) {
-					// Called from context menu - arg is a tree item
-					const pr = arg.pullRequest;
-					const org = vscode.workspace
-						.getConfiguration("azureDevOpsPRViewer")
-						.get<string>("organization", "");
-					url = `https://dev.azure.com/${org}/${pr.repository.project.name}/_git/${pr.repository.name}/pullrequest/${pr.pullRequestId}`;
-				}
-
-				if (arg && typeof arg === "object" && "repository" in arg) {
-					// Called with PR object directly
-					const pr = arg;
-					const org = vscode.workspace
-						.getConfiguration("azureDevOpsPRViewer")
-						.get<string>("organization", "");
-					url = `https://dev.azure.com/${org}/${pr.repository.project.name}/_git/${pr.repository.name}/pullrequest/${pr.pullRequestId}`;
-				}
-
-				if (!url) {
+				// Extract PR from various argument formats
+				const pr = extractPullRequest(arg);
+				if (!pr) {
 					vscode.window.showErrorMessage("Unable to open PR: invalid argument");
 					return;
 				}
 
+				// Build URL and open in browser
+				const org = vscode.workspace
+					.getConfiguration("azureDevOpsPRViewer")
+					.get<string>("organization", "");
+				const url = buildPRUrl(pr, org);
 				await vscode.env.openExternal(vscode.Uri.parse(url));
 			},
 		),
 		vscode.commands.registerCommand(
 			"azureDevOpsPRs.viewPR",
 			async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
-				let pr: PullRequest | undefined;
-
-				if (arg && typeof arg === "object" && "pullRequest" in arg) {
-					// Called from context menu or tree item click - arg is a tree item
-					pr = arg.pullRequest;
-				}
-
-				if (arg && typeof arg === "object" && "repository" in arg) {
-					// Called with PR object directly
-					pr = arg;
-				}
-
+				// Extract PR from various argument formats
+				const pr = extractPullRequest(arg);
 				if (!pr) {
 					vscode.window.showErrorMessage("Unable to view PR: invalid argument");
 					return;
@@ -177,6 +253,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				);
 			}
 		}),
+		vscode.commands.registerCommand(
+			"azureDevOpsPRs.checkoutBranch",
+			async (arg: string | { pullRequest: PullRequest } | PullRequest | undefined) => {
+				const pr = extractPullRequest(arg);
+				if (!pr) {
+					vscode.window.showErrorMessage("Unable to checkout: invalid PR");
+					return;
+				}
+
+				await checkoutHandler.execute(pr);
+			},
+		),
 		// Watch for configuration changes
 		vscode.workspace.onDidChangeConfiguration((e) => {
 			if (e.affectsConfiguration("azureDevOpsPRViewer.autoRefreshInterval")) {

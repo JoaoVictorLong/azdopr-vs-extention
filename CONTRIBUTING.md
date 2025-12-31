@@ -1,76 +1,74 @@
-# Contributing to Azure DevOps PR Viewer
+# Contributing
 
-Thank you for your interest in contributing to Azure DevOps PR Viewer! This document provides guidelines and instructions for contributing to the project.
+Thank you for your interest in contributing to this extension! This project welcomes contributions and suggestions.
 
-## Getting Started
+After cloning and building, check out the [issues list](https://github.com/johncwaters/azdopr/issues). Issues labeled **good first issue** are great candidates to work on. If you're new to writing extensions for VS Code, reading through some of the [documentation on extensions](https://code.visualstudio.com/api) is helpful.
+
+## Build and Run
 
 ### Prerequisites
 
-- Node.js 16 or higher
-- npm (comes with Node.js)
-- Visual Studio Code
-- Git
+- **Git**
+- **Node.js**, >= 18.x
+- **Visual Studio Code**
 
-### Setting Up Your Development Environment
+If you want to explore the source code of this extension yourself, it's easy to get started:
 
-1. **Fork the repository** on GitHub
+1. Clone the repository
+2. Install dependencies
+3. Compile the TypeScript code
+4. Run and debug by pressing **F5** in VS Code
 
-2. **Clone your fork** locally:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/azdopr.git
-   cd azdopr
-   ```
+See `package.json` for available build scripts.
 
-3. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+## Tests
 
-4. **Configure your Azure DevOps organization** (optional, for testing):
-   - Open VS Code settings
-   - Set `azureDevOpsPRViewer.organization` to your Azure DevOps organization name
+Run the test suite to ensure your changes work correctly:
 
-## Development Workflow
-
-### Building the Extension
-
-- **Development build with watch mode**:
-  ```bash
-  npm run watch
-  ```
-  This will automatically recompile when you make changes.
-
-- **Production build**:
-  ```bash
-  npm run compile
-  ```
-
-### Running and Debugging
-
-1. Open the project in Visual Studio Code
-2. Press `F5` to launch the Extension Development Host
-3. This opens a new VS Code window with the extension loaded
-4. Make changes to the code and reload the window to see updates
-
-### Code Quality
-
-We use Biome for linting and code formatting. Before submitting a pull request:
-
-```bash
-npm run lint
 ```
-
-Fix any linting errors before committing your changes.
-
-### Testing
-
-Run the test suite:
-
-```bash
 npm test
 ```
 
-Please ensure all tests pass before submitting a pull request.
+This will compile, lint, run all tests, and generate a coverage report. Tests are organized into:
+
+- **Unit tests** - Individual module testing
+- **Integration tests** - Multi-module interactions
+- **E2E tests** - Full extension workflows
+
+Test files mirror the `src/` structure and include fixtures and helpers for common test scenarios.
+
+## Architecture
+
+This extension uses several VS Code APIs to provide pull request viewing and review capabilities. At a high level, the code in `src/` is organized into:
+
+- **auth/**: Microsoft Entra OAuth authentication flow
+- **services/**: Core business logic (API client, caching, LFS handling)
+- **providers/**: VS Code tree views and comment providers
+- **views/**: Webview panels for PR details
+- **types/**: TypeScript interfaces and type definitions
+- **utils/**: Utility functions and formatters
+- **constants/**: Configuration and API constants
+
+The entry point is **extension.ts**.
+
+### Key VS Code APIs Used
+
+- **TreeDataProvider**: Pull Requests tree view
+- **WebviewPanel**: PR details page
+- **CommentController**: Inline comments on files
+- **TextDocumentContentProvider**: File content for diffs
+- **Authentication API**: Microsoft authentication for Azure DevOps
+
+### External Dependencies
+
+- **Azure DevOps REST API v7.0**: PRs, comments, file changes
+- **Microsoft Entra OAuth**: Authentication
+- **HTTP client**: API requests
+- **Markdown parser**: Comment rendering
+
+## Code Quality
+
+Run linting and formatting checks before submitting your pull request. Fix any errors that are reported.
 
 ## Making Contributions
 
@@ -92,45 +90,19 @@ Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md) to
 - Your proposed solution
 - Any alternative solutions you've considered
 
-### Submitting Pull Requests
+## Pull Requests
 
-1. **Create a new branch** for your changes:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-   or
-   ```bash
-   git checkout -b fix/your-bug-fix
-   ```
+Before creating a pull request, if the issue involves making changes to the UI, please discuss it in the issue beforehand. This will help keep reviews focused on the code changes.
 
-2. **Make your changes** following our coding conventions:
-   - Write clear, self-documenting code
-   - Follow TypeScript best practices
-   - Keep functions focused and modular
-   - Add comments for complex logic
+### Submitting a Pull Request
 
-3. **Test your changes** thoroughly:
-   - Run the extension in the Extension Development Host
-   - Test with real Azure DevOps PRs if possible
-   - Ensure all tests pass: `npm test`
-   - Run the linter: `npm run lint`
-
-4. **Commit your changes** with clear, descriptive commit messages:
-   ```bash
-   git add .
-   git commit -m "feat: add support for filtering PRs by author"
-   ```
-
-5. **Push to your fork**:
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-
-6. **Open a Pull Request** on GitHub:
-   - Fill out the pull request template
-   - Link any related issues
-   - Describe your changes clearly
-   - Include screenshots for UI changes
+1. Fork and clone the repository
+2. Create a new branch for your changes
+3. Make your changes following our coding conventions
+4. Add or update tests for your changes
+5. Ensure all tests pass and linting checks succeed
+6. Commit your changes with clear, descriptive messages
+7. Push to your fork and submit a pull request
 
 ### Commit Message Guidelines
 
@@ -143,46 +115,49 @@ We follow conventional commit format:
 - `test:` - Test additions or changes
 - `chore:` - Build process or auxiliary tool changes
 
-Example: `feat: add comment editing functionality`
-
-## Project Structure
-
-```
-azdopr/
-├── src/
-│   ├── auth/                 # Authentication logic
-│   ├── constants/            # Configuration constants
-│   ├── providers/            # VS Code UI providers
-│   ├── services/             # Core business logic
-│   ├── types/                # TypeScript type definitions
-│   ├── utils/                # Utility functions
-│   ├── views/                # UI views and webviews
-│   └── extension.ts          # Extension entry point
-├── resources/                # Static assets
-├── .github/                  # GitHub templates
-└── package.json              # Extension manifest
-```
-
-## Coding Conventions
+### Coding Conventions
 
 - Use TypeScript's strict mode
 - Prefer `const` over `let`
 - Use descriptive variable and function names
-- Keep functions small and focused
+- Keep functions small and focused (single responsibility)
 - Add JSDoc comments for public APIs
 - Handle errors gracefully
 - Use async/await for asynchronous operations
+- Avoid over-engineering - keep it simple
+
+## Code of Conduct
+
+This project follows a Code of Conduct to ensure a welcoming and inclusive community. Be considerate to others and try to be courteous and professional at all times.
+
+### Our Standards
+
+- Be respectful and inclusive
+- Accept constructive criticism gracefully
+- Focus on what is best for the community
+- Show empathy towards other community members
+
+### Unacceptable Behavior
+
+- Harassment, trolling, or insulting/derogatory comments
+- Personal or political attacks
+- Publishing others' private information
+- Other conduct that could reasonably be considered inappropriate
+
+If you experience or witness unacceptable behavior, please report it by opening an issue.
 
 ## Questions?
 
 If you have questions or need help:
 
-1. Check existing issues and discussions
+1. Check existing [issues](https://github.com/johncwaters/azdopr/issues) and discussions
 2. Open a new issue with the "question" label
-3. Reach out via the project's GitHub issues
+3. Review the [documentation](https://github.com/johncwaters/azdopr#readme)
 
 ## License
 
-By contributing to Azure DevOps PR Viewer, you agree that your contributions will be licensed under the MIT License.
+By contributing to Azure DevOps PR Viewer, you agree that your contributions will be licensed under the [MIT License](LICENSE).
 
-Thank you for contributing!
+---
+
+Thank you for contributing! 🎉

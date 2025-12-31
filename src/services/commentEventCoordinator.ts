@@ -1,4 +1,5 @@
 import type * as vscode from "vscode";
+import { COMMENT_DEBOUNCE_MS } from "../constants/cacheConfig";
 import type { PRCommentController } from "../providers/prCommentController";
 import { Logger } from "../utils/logger";
 import { PRContextManager } from "./prContextManager";
@@ -18,7 +19,7 @@ export class CommentEventCoordinator {
 	private readonly loadedDocuments: Set<string> = new Set();
 
 	/** Debounce delay in milliseconds */
-	private readonly debounceMs: number = 50;
+	private readonly debounceMs: number = COMMENT_DEBOUNCE_MS;
 
 	constructor(private readonly commentController: PRCommentController) {
 		logger.debug("CommentEventCoordinator: Initialized");
@@ -51,7 +52,7 @@ export class CommentEventCoordinator {
 				await this.commentController.loadCommentsForDocument(document);
 				this.loadedDocuments.add(key);
 			} catch (error) {
-				console.error(`[CommentEventCoordinator] Error loading comments:`, error);
+				logger.error("[CommentEventCoordinator] Error loading comments", error);
 			}
 		}, this.debounceMs);
 
@@ -71,7 +72,7 @@ export class CommentEventCoordinator {
 
 		// Skip if already loaded or currently being loaded
 		if (this.loadedDocuments.has(key) || this.debounceTimers.has(key)) {
-			console.log(
+			logger.debug(
 				`[CommentEventCoordinator] Skipping editor change - already loaded/loading: ${editor.document.uri.path}`,
 			);
 			return;
@@ -111,8 +112,8 @@ export class CommentEventCoordinator {
 		// Cleanup context
 		try {
 			PRContextManager.getInstance().clearFileContext(document.uri);
-		} catch (error) {
-			console.warn(`[CommentEventCoordinator] Failed to clear context:`, error);
+		} catch {
+			logger.warn("[CommentEventCoordinator] Failed to clear context");
 		}
 	}
 

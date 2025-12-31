@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance } from "axios";
 import * as vscode from "vscode";
 import type { AzureDevOpsAuthProvider } from "../auth/authProvider";
+import { COMMENT_TYPE, THREAD_STATUS } from "../constants/azureDevOpsConstants";
 import { Logger } from "../utils/logger";
 
 const logger = Logger.getInstance();
@@ -85,7 +86,7 @@ export interface PRThread {
 	publishedDate: Date;
 	lastUpdatedDate: Date;
 	comments: PRComment[];
-	status: string;
+	status: number;
 	threadContext?: {
 		filePath?: string;
 		leftFileStart?: { line: number; offset: number };
@@ -119,7 +120,7 @@ export interface PRComment {
 	content: string;
 	publishedDate: Date;
 	lastUpdatedDate: Date;
-	commentType: string;
+	commentType: number;
 }
 
 export interface PRBuildStatus {
@@ -207,7 +208,7 @@ interface AzDOComment {
 	content: string;
 	publishedDate: string;
 	lastUpdatedDate: string;
-	commentType: string;
+	commentType: number;
 }
 
 interface AzDOThread {
@@ -215,7 +216,7 @@ interface AzDOThread {
 	publishedDate: string;
 	lastUpdatedDate: string;
 	comments: AzDOComment[];
-	status: string;
+	status: number;
 	threadContext?: {
 		filePath?: string;
 		leftFileStart?: { line: number; offset: number };
@@ -288,9 +289,38 @@ interface CacheEntry<T> {
 	ttl: number;
 }
 
+/**
+ * Azure DevOps REST API client
+ *
+ * ## Dual Caching Strategy
+ *
+ * This client uses TWO separate caching layers for different purposes:
+ *
+ * 1. **Short-term HTTP Response Cache** (this.cache - 1 minute TTL)
+ *    - Caches raw API responses to prevent duplicate HTTP calls
+ *    - Used by cachedFetch() method
+ *    - Helps when same API endpoint is called multiple times in quick succession
+ *    - Example: Multiple components requesting the same project list
+ *
+ * 2. **Medium-term PR Data Cache** (PRCacheService - 5 minute TTL)
+ *    - Caches high-level PR data structures (details, iterations, files, threads)
+ *    - Managed by PRCacheService singleton
+ *    - Used by PullRequestViewerPanel to avoid re-fetching entire PR data
+ *    - Example: User switches between PR files without re-fetching PR details
+ *
+ * **When to use which cache:**
+ * - Use this.cache: For individual API calls (projects, repos, file content)
+ * - Use PRCacheService: For complete PR data structures that are expensive to rebuild
+ */
 export class AzureDevOpsClient {
 	private readonly axiosInstance: AxiosInstance;
 	private organization: string = "";
+
+	/**
+	 * Short-term cache for individual API responses
+	 * TTL: 1 minute (configurable per-call)
+	 * Purpose: Prevent duplicate HTTP calls for the same endpoint
+	 */
 	private readonly cache = new Map<string, CacheEntry<unknown>>();
 
 	constructor(private readonly authProvider: AzureDevOpsAuthProvider) {
@@ -417,7 +447,7 @@ export class AzureDevOpsClient {
 
 				if (includedProjects.length > 0) {
 					projects = projects.filter((p) => includedProjects.includes(p.name));
-					console.log(
+					logger.info(
 						`Filtered to ${projects.length} projects: ${projects.map((p) => p.name).join(", ")}`,
 					);
 				}
@@ -526,11 +556,11 @@ export class AzureDevOpsClient {
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/threads?api-version=7.0`;
 		const response = await this.axiosInstance.get(url, { headers });
 
-		console.log(`API returned ${response.data.value.length} threads for PR ${pullRequestId}`);
+		logger.debug(`API returned ${response.data.value.length} threads for PR ${pullRequestId}`);
 
 		return response.data.value.map((thread: AzDOThread) => {
 			// Log thread details for debugging
-			console.log(
+			logger.debug(
 				`Thread ${thread.id}: has ${thread.comments?.length || 0} comments, isDeleted: ${(thread as unknown as { isDeleted?: boolean }).isDeleted}, status: ${thread.status}`,
 			);
 
@@ -563,7 +593,7 @@ export class AzureDevOpsClient {
 
 		try {
 			const response = await this.axiosInstance.get(url, { headers });
-			console.log(`API returned ${response.data.value.length} updates for PR ${pullRequestId}`);
+			logger.debug(`API returned ${response.data.value.length} updates for PR ${pullRequestId}`);
 
 			return response.data.value.map((update: AzDOUpdate) => ({
 				updateId: update.updateId,
@@ -572,7 +602,7 @@ export class AzureDevOpsClient {
 				description: update.description,
 			}));
 		} catch (error) {
-			console.error("Failed to fetch PR updates:", error);
+			logger.error("Failed to fetch PR updates", error);
 			return [];
 		}
 	}
@@ -594,9 +624,9 @@ export class AzureDevOpsClient {
 				result: status.state,
 				url: status.targetUrl || "",
 			}));
-		} catch (error) {
+		} catch {
 			// Statuses endpoint might not be available for all organizations
-			console.warn("Failed to fetch PR statuses:", error);
+			logger.warn("Failed to fetch PR statuses");
 			return [];
 		}
 	}
@@ -633,7 +663,7 @@ export class AzureDevOpsClient {
 			// Return a simple diff representation
 			return `Source (${sourceCommit.substring(0, 7)}):\n${sourceContent}\n\nTarget (${targetCommit.substring(0, 7)}):\n${targetContent}`;
 		} catch (error) {
-			console.error("Failed to fetch file diff:", error);
+			logger.error("Failed to fetch file diff", error);
 			return "Unable to fetch diff";
 		}
 	}
@@ -669,10 +699,10 @@ export class AzureDevOpsClient {
 				{
 					parentCommentId: 0,
 					content: commentText,
-					commentType: 1, // 1 = text comment
+					commentType: COMMENT_TYPE.TEXT,
 				},
 			],
-			status: 1, // 1 = active
+			status: THREAD_STATUS.ACTIVE,
 		};
 
 		// Add thread context for line-level comments
@@ -762,7 +792,7 @@ export class AzureDevOpsClient {
 
 		const requestBody = {
 			content: commentText,
-			commentType: 1, // 1 = text comment
+			commentType: COMMENT_TYPE.TEXT,
 		};
 
 		const response = await this.axiosInstance.post(url, requestBody, {
@@ -933,7 +963,7 @@ export class AzureDevOpsClient {
 
 				// If content exists but is not a string, or is empty, return empty string
 				if (content !== null && content !== undefined) {
-					console.warn(`Unexpected content type for file ${path}:`, typeof content);
+					logger.warn(`Unexpected content type for file ${path}: ${typeof content}`);
 				}
 				return "";
 			}
@@ -1048,7 +1078,7 @@ export class AzureDevOpsClient {
 				}
 
 				if (content !== null && content !== undefined) {
-					console.warn(`Unexpected content type for file ${path}:`, typeof content);
+					logger.warn(`Unexpected content type for file ${path}: ${typeof content}`);
 				}
 				return "";
 			}
@@ -1163,7 +1193,7 @@ export class AzureDevOpsClient {
 			const contentType = response.headers["content-type"] || "image/png";
 			const dataUri = `data:${contentType};base64,${base64}`;
 
-			console.log(
+			logger.debug(
 				`[AzureDevOpsClient] Successfully converted image to data URI (${base64.length} bytes)`,
 			);
 

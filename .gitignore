@@ -30,5 +30,10 @@ Thumbs.db
 .cache/
 .temp/
 
+# Test coverage
+coverage/
+.nyc_output/
+*.lcov
+
 # Windows device name artifacts
 nul
