@@ -2520,7 +2520,8 @@ export class PullRequestViewerPanel {
 				const statusLabel = getThreadStatusLabel(thread.status);
 				const statusNum =
 					typeof thread.status === "string" ? Number.parseInt(thread.status, 10) : thread.status;
-				const isResolved = statusNum === 2 || statusNum === 4;
+				// Check resolved status using label (handles both numeric and text status values)
+				const isResolved = statusLabel === "Resolved" || statusLabel === "Closed";
 				let statusBadge = "";
 
 				// Only show status badges for specific non-active states

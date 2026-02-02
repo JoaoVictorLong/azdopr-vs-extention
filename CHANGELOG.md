@@ -2,6 +2,88 @@
 
 All notable changes to the Azure DevOps PR Viewer extension.
 
+## [1.8.0] - 2025-02-02:
+
+### Added
+
+- **Reviewed files tracking** - Track which files you've reviewed in a PR with persistent state
+  - Files marked as reviewed are visually distinguished in the file list
+  - Review status persists across sessions
+  - Path normalization ensures consistent tracking
+- **Notification vs discussion distinction** - System notification comments are now visually separated from user discussions
+- **HTML sanitization for comments** - Improved security and display for comment content with proper HTML handling
+
+### Changed
+
+- **Enhanced PR commenting experience** - Rich editing and interactivity improvements
+  - Better comment formatting and display
+  - Improved UX for comment threads
+- **Improved sidebar clarity** - Cleaner, more intuitive sidebar organization
+
+### Fixed
+
+- **URL substring sanitization** - Security fix for incomplete URL validation (code scanning alert #2)
+
+## [1.7.0] - 2025-01-27
+
+### Added
+
+- **Checkout Branch command** - Checkout PR source branches locally directly from VS Code
+  - Right-click on any PR to checkout its branch
+  - Automatically handles remote tracking
+- **Comprehensive test suite** - Added extensive unit tests for:
+  - PR status badges and user fetching logic
+  - Azure DevOps authentication and constants
+  - Test helpers and utilities
+
+### Changed
+
+- **Enhanced PR handling and caching** - Improved performance and reliability for PR operations
+- **Refactored error handling and logging** - Better error messages and logging mechanisms
+- **Consolidated test configurations** - Improved code quality and test organization
+
+### Fixed
+
+- **Workflow permissions** - Security fix for workflow permission configuration (code scanning alert #1)
+
+### Removed
+
+- Obsolete extension test file
+- Unused ESLint configuration
+
+## [1.6.0] - 2025-01-20
+
+### Added
+
+- **GitHub Actions publishing workflow** - Automated extension publishing to VS Code Marketplace
+- **Release scripts** - npm scripts for patch, minor, and major version releases
+- **Code of Conduct** - Added Contributor Covenant Code of Conduct
+
+### Changed
+
+- **Streamlined README** - Simplified and clarified documentation
+- **Removed license badge** - Cleaner presentation in README
+
+### Security
+
+- Dependency updates for js-yaml, glob, and jws
+
+## [1.5.0] - 2025-01-15
+
+### Added
+
+- **Logging service** - Centralized logging for better debugging and diagnostics
+- **Cache configuration** - Configurable caching behavior for API responses
+
+### Changed
+
+- **Git LFS infrastructure** - Implemented file handling infrastructure supporting various file types
+- **Updated contribution guidelines** - Improved templates and security policies
+
+### Fixed
+
+- **Windows device name handling** - Added artifacts to .gitignore for Windows compatibility
+
 ## [1.4.0-beta.1] - 2025-12-10
 
 ### Added
