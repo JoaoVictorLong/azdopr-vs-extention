@@ -1,5 +1,7 @@
 # Azure DevOps PR Viewer
 
+[![Publish VS Code Extension](https://github.com/johncwaters/azdopr/actions/workflows/main.yml/badge.svg)](https://github.com/johncwaters/azdopr/actions/workflows/main.yml)
+
 View and review all your organization's Azure DevOps pull requests directly in VS Code. No more browser switching.
 
 ## Features
@@ -31,7 +33,6 @@ View and review all your organization's Azure DevOps pull requests directly in V
 
 1. **Configure your organization**
    Open VS Code settings and set `azureDevOpsPRViewer.organization` to your Azure DevOps organization name.
-
    - From `https://dev.azure.com/myorg` → use `myorg`
    - From `https://myorg.visualstudio.com` → use `myorg`
 
