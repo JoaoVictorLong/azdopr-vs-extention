@@ -1970,6 +1970,31 @@ export class PullRequestViewerPanel {
                 font-size: 12px;
             }
 
+            /* Notification items - activity log style, not comments */
+            .notification-item {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 12px;
+                font-size: 12px;
+                color: var(--vscode-descriptionForeground);
+                border-bottom: 1px solid var(--vscode-panel-border);
+            }
+            .notification-item:last-child {
+                border-bottom: none;
+            }
+            .notification-icon {
+                font-size: 14px;
+                opacity: 0.7;
+            }
+            .notification-text {
+                flex: 1;
+            }
+            .notification-time {
+                font-size: 11px;
+                opacity: 0.7;
+            }
+
             /* Interactive comment styles */
             .thread-actions {
                 display: flex;
@@ -2370,6 +2395,57 @@ export class PullRequestViewerPanel {
 	}
 
 	/**
+	 * Check if a thread is a notification comment (system-generated, not user discussion)
+	 * These include reviewer joins/leaves, policy updates, build status, etc.
+	 */
+	private _isNotificationComment(thread: PRThread): boolean {
+		if (!thread.comments || thread.comments.length === 0) {
+			return false;
+		}
+
+		const firstComment = thread.comments[0];
+
+		// Check commentType (2 = system)
+		if (firstComment.commentType === 2) {
+			return true;
+		}
+
+		// Check for system author names
+		const authorName = firstComment.author?.displayName || '';
+		const systemAuthorPatterns = [
+			/Microsoft\.VisualStudio\.Services/i,
+			/^TFS$/i,
+			/Azure DevOps/i,
+			/^\[?System\]?$/i,
+		];
+		if (systemAuthorPatterns.some(pattern => pattern.test(authorName))) {
+			return true;
+		}
+
+		// Check content patterns for notification-style messages
+		const content = firstComment.content || '';
+		const notificationPatterns = [
+			/joined as a reviewer/i,
+			/left as a reviewer/i,
+			/was added as a reviewer/i,
+			/was removed as a reviewer/i,
+			/Policy status/i,
+			/policy has been/i,
+			/Build status/i,
+			/build succeeded/i,
+			/build failed/i,
+			/check has (passed|failed|succeeded)/i,
+			/status has been updated/i,
+			/marked .* as (draft|ready for review)/i,
+		];
+		if (notificationPatterns.some(pattern => pattern.test(content))) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
 	 * Get HTML for general PR comments and file-level comments
 	 * Includes:
 	 * 1. Threads without a file path (general PR comments)
@@ -2425,8 +2501,20 @@ export class PullRequestViewerPanel {
 				const canEditFirstComment =
 					this.currentUserId && firstComment.author?.id === this.currentUserId;
 
-				// Check if this is a system comment (commentType === 2)
-				const isSystemComment = firstComment.commentType === 2;
+				// Check if this is a notification comment (system-generated)
+				const isNotification = this._isNotificationComment(thread);
+
+				// For notification comments, render as simple activity item
+				if (isNotification) {
+					const timeAgo = formatTimeAgo(thread.lastUpdatedDate);
+					const notificationText = content.replace(/<[^>]*>/g, '').trim(); // Strip any HTML
+					return `
+						<div class="notification-item">
+							<span class="notification-icon">📋</span>
+							<span class="notification-text">${this._escapeHtml(notificationText)}</span>
+							<span class="notification-time">${timeAgo}</span>
+						</div>`;
+				}
 
 				// Get status info - only show badge for meaningful statuses
 				const statusLabel = getThreadStatusLabel(thread.status);
@@ -2456,8 +2544,8 @@ export class PullRequestViewerPanel {
 
 				const timeAgo = formatTimeAgo(thread.lastUpdatedDate);
 
-				// Thread actions (resolve/unresolve) - only show for non-system comments
-				const threadActionsHtml = isSystemComment ? '' : `
+				// Thread actions (resolve/unresolve)
+				const threadActionsHtml = `
 					<div class="thread-actions">
 						${
 							!isResolved
