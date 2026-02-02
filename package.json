@@ -63,6 +63,16 @@
         "icon": "$(edit)"
       },
       {
+        "command": "azdo-pr-comments.saveEditedComment",
+        "title": "Save",
+        "icon": "$(save)"
+      },
+      {
+        "command": "azdo-pr-comments.cancelEditComment",
+        "title": "Cancel",
+        "icon": "$(close)"
+      },
+      {
         "command": "azdo-pr-comments.deleteComment",
         "title": "Delete Comment",
         "icon": "$(trash)"
@@ -87,6 +97,29 @@
         "title": "Checkout Branch Locally",
         "category": "Azure DevOps PR Viewer",
         "icon": "$(git-branch)"
+      },
+      {
+        "command": "azdo-pr-comments.applySuggestion",
+        "title": "Apply Suggestion",
+        "icon": "$(check)"
+      },
+      {
+        "command": "azdo-pr-comments.collapseAllThreads",
+        "title": "Collapse All Comment Threads",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(fold)"
+      },
+      {
+        "command": "azdo-pr-comments.expandAllThreads",
+        "title": "Expand All Comment Threads",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(unfold)"
+      },
+      {
+        "command": "azdo-pr-comments.addFileComment",
+        "title": "Add File Comment",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(comment-discussion)"
       }
     ],
     "viewsContainers": {
@@ -144,13 +177,28 @@
       "comments/comment/title": [
         {
           "command": "azdo-pr-comments.editComment",
-          "when": "commentController == azdo-pr-comments && comment =~ /canEdit/",
+          "when": "commentController == azdo-pr-comments && comment =~ /canEdit/ && !(comment =~ /editing/)",
           "group": "inline@1"
         },
         {
-          "command": "azdo-pr-comments.deleteComment",
-          "when": "commentController == azdo-pr-comments && comment =~ /canDelete/",
+          "command": "azdo-pr-comments.saveEditedComment",
+          "when": "commentController == azdo-pr-comments && comment =~ /editing/",
+          "group": "inline@1"
+        },
+        {
+          "command": "azdo-pr-comments.cancelEditComment",
+          "when": "commentController == azdo-pr-comments && comment =~ /editing/",
           "group": "inline@2"
+        },
+        {
+          "command": "azdo-pr-comments.deleteComment",
+          "when": "commentController == azdo-pr-comments && comment =~ /canDelete/ && !(comment =~ /editing/)",
+          "group": "inline@3"
+        },
+        {
+          "command": "azdo-pr-comments.applySuggestion",
+          "when": "commentController == azdo-pr-comments && comment =~ /hasSuggestion/ && !(comment =~ /editing/)",
+          "group": "inline@4"
         }
       ],
       "comments/comment/context": []
@@ -212,6 +260,11 @@
             "pdf"
           ],
           "description": "File types to handle as LFS files (e.g., pdf, xlsx, png)"
+        },
+        "azureDevOpsPRViewer.comments.autoCollapseResolved": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically collapse resolved comment threads"
         }
       }
     }

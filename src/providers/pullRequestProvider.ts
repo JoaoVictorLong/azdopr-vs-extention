@@ -220,21 +220,32 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			for (const [repoName, prs] of sortedRepos) {
 				projectPRCount += prs.length;
 
-				// Sort PRs within repo by age
-				const sortedPRs = prs.toSorted(
-					(a, b) => a.creationDate.getTime() - b.creationDate.getTime(),
-				);
+				// Sort PRs within repo by actionability (needs review first)
+				const sortedPRs = this.sortPRsByActionability(prs);
 
 				const prItems = sortedPRs.map((pr) => this.createPRTreeItem(pr));
+
+				// Count PRs that need current user's review
+				const needsReviewCount = prs.filter((pr) => this.needsCurrentUserReview(pr)).length;
 
 				const repoItem = new PRTreeItem(
 					`${repoName} (${prs.length})`,
 					"",
-					vscode.TreeItemCollapsibleState.Collapsed,
+					needsReviewCount > 0
+						? vscode.TreeItemCollapsibleState.Expanded
+						: vscode.TreeItemCollapsibleState.Collapsed,
 				);
 				repoItem.contextValue = "repository";
 				repoItem.children = prItems;
 				repoItem.iconPath = new vscode.ThemeIcon("repo", new vscode.ThemeColor("charts.yellow"));
+
+				// Add badge showing PRs needing review
+				if (needsReviewCount > 0) {
+					repoItem.badge = {
+						value: needsReviewCount,
+						tooltip: `${needsReviewCount} PR${needsReviewCount > 1 ? "s" : ""} need your review`,
+					};
+				}
 
 				repoItems.push(repoItem);
 			}
@@ -246,7 +257,10 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			);
 			projectItem.contextValue = "project";
 			projectItem.children = repoItems;
-			projectItem.iconPath = new vscode.ThemeIcon("project", new vscode.ThemeColor("charts.purple"));
+			projectItem.iconPath = new vscode.ThemeIcon(
+				"project",
+				new vscode.ThemeColor("charts.purple"),
+			);
 
 			projectItems.push(projectItem);
 		}
@@ -258,21 +272,21 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		const ageInDays = this.getAgeInDays(pr.creationDate);
 		const ageText = this.formatAge(ageInDays);
 
-		// Get status badges
-		const badges = this.getPRStatusBadges(pr);
-		const badgePrefix = badges.length > 0 ? `${badges.join(" ")} ` : "";
+		// Determine review status for clean display
+		const isAuthor = this.isCurrentUserAuthor(pr);
+		const needsReview = this.needsCurrentUserReview(pr);
+		const myReviewStatus = this.getCurrentUserReviewStatus(pr);
+		const isBlocked = this.isPRBlocked(pr);
 
-		const label = `${badgePrefix}${pr.title}`;
-		const description = `${pr.createdBy.displayName} • ${ageText}`;
+		// Build description with status context
+		const statusInfo = this.getStatusDescription(pr, isBlocked, myReviewStatus);
+		const ageWarning = ageInDays >= 14 ? " • ⚠️ Stale" : ageInDays >= 7 ? " • Aging" : "";
+		const description = `${pr.createdBy.displayName} • ${ageText}${ageWarning}${statusInfo}`;
 
-		const item = new PRTreeItem(label, description, vscode.TreeItemCollapsibleState.None, pr);
+		const item = new PRTreeItem(pr.title, description, vscode.TreeItemCollapsibleState.None, pr);
 
-		// Set icon based on PR status
-		if (pr.isDraft) {
-			item.iconPath = new vscode.ThemeIcon("git-pull-request-draft", new vscode.ThemeColor("charts.gray"));
-		} else {
-			item.iconPath = new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.green"));
-		}
+		// Set icon and color based on review status (visual priority system)
+		item.iconPath = this.getPRIcon(pr, isAuthor, needsReview, myReviewStatus, isBlocked);
 
 		// Set context value for menu actions
 		item.contextValue = "pullrequest";
@@ -290,27 +304,157 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		return item;
 	}
 
+	private isCurrentUserAuthor(pr: PullRequest): boolean {
+		if (!this.currentUserId) return false;
+		return pr.createdBy.uniqueName === this.currentUserId;
+	}
+
+	private needsCurrentUserReview(pr: PullRequest): boolean {
+		if (!this.currentUserId || !pr.reviewers) return false;
+		const myReview = pr.reviewers.find((r) => r.uniqueName === this.currentUserId);
+		// Needs review if user is a reviewer but hasn't voted yet
+		return myReview !== undefined && myReview.vote === REVIEWER_VOTE.NO_VOTE;
+	}
+
+	private getCurrentUserReviewStatus(pr: PullRequest): number | null {
+		if (!this.currentUserId || !pr.reviewers) return null;
+		const myReview = pr.reviewers.find((r) => r.uniqueName === this.currentUserId);
+		return myReview?.vote ?? null;
+	}
+
+	private isPRBlocked(pr: PullRequest): boolean {
+		if (!pr.reviewers) return false;
+		return pr.reviewers.some((r) => r.vote === REVIEWER_VOTE.REJECTED);
+	}
+
+	private getStatusDescription(
+		_pr: PullRequest,
+		isBlocked: boolean,
+		myReviewStatus: number | null,
+	): string {
+		if (isBlocked) return " • 🚫 Blocked";
+		if (myReviewStatus === REVIEWER_VOTE.WAITING_FOR_AUTHOR) return " • ⏳ Waiting";
+		return "";
+	}
+
+	/**
+	 * Sort PRs by actionability - most actionable first
+	 * Priority: 1. Needs your review, 2. Blocked, 3. Waiting for author, 4. Reviewed, 5. Your own PRs
+	 */
+	private sortPRsByActionability(prs: PullRequest[]): PullRequest[] {
+		return prs.toSorted((a, b) => {
+			const priorityA = this.getPRActionPriority(a);
+			const priorityB = this.getPRActionPriority(b);
+
+			if (priorityA !== priorityB) {
+				return priorityA - priorityB; // Lower priority number = higher in list
+			}
+
+			// Within same priority, sort by age (oldest first)
+			return a.creationDate.getTime() - b.creationDate.getTime();
+		});
+	}
+
+	private getPRActionPriority(pr: PullRequest): number {
+		const isAuthor = this.isCurrentUserAuthor(pr);
+		const needsReview = this.needsCurrentUserReview(pr);
+		const isBlocked = this.isPRBlocked(pr);
+		const myStatus = this.getCurrentUserReviewStatus(pr);
+
+		// Your own PRs - lowest priority (you can't review your own)
+		if (isAuthor) return 5;
+
+		// Needs your review - highest priority
+		if (needsReview) return 1;
+
+		// Blocked PRs - show early so user knows context
+		if (isBlocked) return 2;
+
+		// Waiting for author
+		if (myStatus === REVIEWER_VOTE.WAITING_FOR_AUTHOR) return 3;
+
+		// Already reviewed
+		if (myStatus === REVIEWER_VOTE.APPROVED || myStatus === REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS)
+			return 4;
+
+		// Default
+		return 4;
+	}
+
+	private getPRIcon(
+		pr: PullRequest,
+		isAuthor: boolean,
+		needsReview: boolean,
+		myReviewStatus: number | null,
+		isBlocked: boolean,
+	): vscode.ThemeIcon {
+		// Draft PRs always gray
+		if (pr.isDraft) {
+			return new vscode.ThemeIcon("git-pull-request-draft", new vscode.ThemeColor("charts.gray"));
+		}
+
+		// Your own PRs - blue
+		if (isAuthor) {
+			return new vscode.ThemeIcon("git-pull-request-create", new vscode.ThemeColor("charts.blue"));
+		}
+
+		// Blocked by rejection - red
+		if (isBlocked) {
+			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.red"));
+		}
+
+		// Needs your review - orange (high visibility)
+		if (needsReview) {
+			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.orange"));
+		}
+
+		// You approved - green
+		if (
+			myReviewStatus === REVIEWER_VOTE.APPROVED ||
+			myReviewStatus === REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS
+		) {
+			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.green"));
+		}
+
+		// You rejected - red
+		if (myReviewStatus === REVIEWER_VOTE.REJECTED) {
+			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.red"));
+		}
+
+		// Default - green (active PR)
+		return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.green"));
+	}
+
 	private createTooltip(pr: PullRequest, ageText: string): vscode.MarkdownString {
 		const tooltip = new vscode.MarkdownString();
 		tooltip.appendMarkdown(`### ${pr.title}\n\n`);
 
-		// Add badge explanations if present
-		const badges = this.getPRStatusBadges(pr);
-		if (badges.length > 0) {
-			tooltip.appendMarkdown("**Status:**\n");
-			if (badges.includes("✅")) {
-				tooltip.appendMarkdown("- ✅ You approved this PR\n");
-			}
-			if (badges.includes("❌")) {
-				tooltip.appendMarkdown("- ❌ You rejected this PR\n");
-			}
-			if (badges.includes("🚫")) {
-				tooltip.appendMarkdown("- 🚫 Blocked by reviewer rejection\n");
-			}
-			if (badges.includes("⏳")) {
-				tooltip.appendMarkdown("- ⏳ Waiting for author\n");
-			}
-			tooltip.appendMarkdown("\n");
+		// Add your review status
+		const isAuthor = this.isCurrentUserAuthor(pr);
+		const needsReview = this.needsCurrentUserReview(pr);
+		const myStatus = this.getCurrentUserReviewStatus(pr);
+		const isBlocked = this.isPRBlocked(pr);
+
+		tooltip.appendMarkdown("**Your Status:** ");
+		if (isAuthor) {
+			tooltip.appendMarkdown("🔵 You authored this PR\n\n");
+		} else if (needsReview) {
+			tooltip.appendMarkdown("🟠 **Needs your review**\n\n");
+		} else if (
+			myStatus === REVIEWER_VOTE.APPROVED ||
+			myStatus === REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS
+		) {
+			tooltip.appendMarkdown("🟢 You approved\n\n");
+		} else if (myStatus === REVIEWER_VOTE.REJECTED) {
+			tooltip.appendMarkdown("🔴 You rejected\n\n");
+		} else if (myStatus === REVIEWER_VOTE.WAITING_FOR_AUTHOR) {
+			tooltip.appendMarkdown("⏳ Waiting for author\n\n");
+		} else {
+			tooltip.appendMarkdown("Not a reviewer\n\n");
+		}
+
+		if (isBlocked) {
+			tooltip.appendMarkdown("⚠️ **Blocked by rejection**\n\n");
 		}
 
 		tooltip.appendMarkdown(`**Project:** ${pr.repository.project.name}\n\n`);
@@ -406,48 +550,12 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			this.currentUserId = null;
 		}
 	}
-
-	private getPRStatusBadges(pr: PullRequest): string[] {
-		const badges: string[] = [];
-
-		if (!this.currentUserId) {
-			return badges;
-		}
-
-		// Check current user's review status
-		const myReview = pr.reviewers?.find((r) => r.uniqueName === this.currentUserId);
-		if (myReview) {
-			if (
-				myReview.vote === REVIEWER_VOTE.APPROVED ||
-				myReview.vote === REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS
-			) {
-				badges.push("✅"); // Green checkmark - you approved
-			} else if (myReview.vote === REVIEWER_VOTE.REJECTED) {
-				badges.push("❌"); // Red X - you rejected
-			}
-		}
-
-		// Check others' review status (excluding current user)
-		const othersReviews = pr.reviewers?.filter((r) => r.uniqueName !== this.currentUserId) || [];
-
-		const hasRejection = othersReviews.some((r) => r.vote === REVIEWER_VOTE.REJECTED);
-		const hasWaitingForAuthor = othersReviews.some(
-			(r) => r.vote === REVIEWER_VOTE.WAITING_FOR_AUTHOR,
-		);
-
-		if (hasRejection) {
-			badges.push("🚫"); // No entry sign - blocked by rejection
-		} else if (hasWaitingForAuthor) {
-			badges.push("⏳"); // Hourglass - waiting for author
-		}
-
-		return badges;
-	}
 }
 
 class PRTreeItem extends vscode.TreeItem {
 	children?: PRTreeItem[];
 	pullRequest?: PullRequest;
+	declare badge?: { value: number; tooltip?: string };
 
 	constructor(
 		public readonly label: string,

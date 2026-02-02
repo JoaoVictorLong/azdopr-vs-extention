@@ -203,6 +203,7 @@ export class AzDOComment extends CommentBase {
 	private publishedDate: Date;
 	private lastUpdatedDate: Date;
 	private wasEdited: boolean = false;
+	private editingOriginalContent?: string;
 
 	constructor(
 		private serverComment: PRComment,
@@ -292,6 +293,11 @@ export class AzDOComment extends CommentBase {
 		const hasSuggestion = this.hasSuggestion();
 
 		this.updateContext(canEdit, canDelete, hasSuggestion);
+
+		// Add "editing" context value when in edit mode
+		if (this._mode === vscode.CommentMode.Editing && this._contextValue) {
+			this._contextValue = `${this._contextValue},editing`;
+		}
 	}
 
 	/**
@@ -332,5 +338,61 @@ export class AzDOComment extends CommentBase {
 	 */
 	public getThread(): vscode.CommentThread {
 		return this.parent;
+	}
+
+	/**
+	 * Start editing mode for this comment
+	 */
+	public startEdit(): void {
+		this.editingOriginalContent = this.getEditableContent();
+		this._mode = vscode.CommentMode.Editing;
+		// Set body to raw content for editing (not markdown)
+		this._body = this.editingOriginalContent;
+		this.updatePermissions();
+	}
+
+	/**
+	 * Cancel editing and restore original content
+	 */
+	public cancelEdit(): void {
+		if (this.editingOriginalContent !== undefined) {
+			this._body = this.formatBody(this.editingOriginalContent);
+		}
+		this._mode = vscode.CommentMode.Preview;
+		this.editingOriginalContent = undefined;
+		this.updatePermissions();
+	}
+
+	/**
+	 * Get the edited content (during edit mode)
+	 */
+	public getEditedContent(): string {
+		// Body could be string or MarkdownString during edit
+		return typeof this._body === "string" ? this._body : this._body.value;
+	}
+
+	/**
+	 * Extract suggestion content from comment
+	 * Suggestion format: ```suggestion
+	 * <suggested code>
+	 * ```
+	 */
+	public extractSuggestion(): { content: string; originalLine: number } | null {
+		const content = this.serverComment.content;
+		const match = content.match(/```suggestion\s*\n([\s\S]*?)```/i);
+		if (!match) {
+			return null;
+		}
+
+		// Get the line number from the parent thread
+		const lineNumber = this.parent.range?.start.line ?? -1;
+		if (lineNumber < 0) {
+			return null;
+		}
+
+		return {
+			content: match[1].trimEnd(), // Keep leading whitespace for indentation
+			originalLine: lineNumber + 1, // Convert to 1-based
+		};
 	}
 }

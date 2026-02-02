@@ -279,6 +279,14 @@ export class CommentThreadManager {
 		} else {
 			thread.label = undefined;
 		}
+
+		// Auto-collapse resolved threads based on setting
+		const autoCollapseResolved = vscode.workspace
+			.getConfiguration("azureDevOpsPRViewer.comments")
+			.get<boolean>("autoCollapseResolved", true);
+		if (autoCollapseResolved && thread.state === vscode.CommentThreadState.Resolved) {
+			thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
+		}
 	}
 
 	/**
@@ -402,18 +410,33 @@ export class CommentThreadManager {
 
 		// Update or create threads from server data
 		for (const serverThread of serverThreads) {
-			// Determine line number based on side - NO FALLBACK to prevent duplicates
+			// Determine line number based on side
 			let lineNumber: number | undefined;
+			let isFileLevelComment = false;
+
 			if (side === "modified") {
-				// Only show on modified side if it has a right line number
 				lineNumber = serverThread.threadContext?.rightFileStart?.line;
 			} else {
-				// Only show on base side if it has a left line number
 				lineNumber = serverThread.threadContext?.leftFileStart?.line;
 			}
 
-			// Skip if no line number for this side (prevents duplicates)
-			// Also skip file-level comments (no line number)
+			// Check if this is a file-level comment (has filePath but no line numbers)
+			if (!lineNumber && serverThread.threadContext?.filePath) {
+				const hasAnyLineNumber =
+					serverThread.threadContext.leftFileStart?.line ||
+					serverThread.threadContext.rightFileStart?.line;
+
+				if (!hasAnyLineNumber) {
+					// This is a file-level comment - show at line 0
+					lineNumber = 1; // Show at first line
+					isFileLevelComment = true;
+				} else {
+					// Has line numbers on the other side - skip to prevent duplicates
+					continue;
+				}
+			}
+
+			// Skip if still no line number (shouldn't happen with file-level handling)
 			if (!lineNumber || lineNumber < 1) {
 				continue;
 			}
@@ -435,8 +458,13 @@ export class CommentThreadManager {
 			// Update comments differentially
 			this.updateThreadComments(thread, serverThread.comments, organizationUrl, currentUserId);
 
-			// Update status and label (label shows contributors for active threads)
+			// Update status and label
 			this.updateThreadStatus(thread, serverThread.status, serverThread.comments);
+
+			// Add special label for file-level comments
+			if (isFileLevelComment) {
+				thread.label = thread.label ? `File Comment • ${thread.label}` : "File Comment";
+			}
 		}
 	}
 
@@ -477,5 +505,31 @@ export class CommentThreadManager {
 	 */
 	public getThreadCount(): number {
 		return this.threads.size;
+	}
+
+	/**
+	 * Collapse all threads for a document
+	 */
+	public collapseAllThreads(uri: vscode.Uri): void {
+		const uriString = uri.toString();
+		for (const [key, thread] of this.threads) {
+			if (key.startsWith(uriString)) {
+				thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
+			}
+		}
+		logger.debug(`ThreadManager: Collapsed all threads for ${uri.path}`);
+	}
+
+	/**
+	 * Expand all threads for a document
+	 */
+	public expandAllThreads(uri: vscode.Uri): void {
+		const uriString = uri.toString();
+		for (const [key, thread] of this.threads) {
+			if (key.startsWith(uriString)) {
+				thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+			}
+		}
+		logger.debug(`ThreadManager: Expanded all threads for ${uri.path}`);
 	}
 }

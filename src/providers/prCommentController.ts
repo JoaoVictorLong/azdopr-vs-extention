@@ -130,6 +130,18 @@ export class PRCommentController {
 				},
 			),
 			vscode.commands.registerCommand(
+				"azdo-pr-comments.saveEditedComment",
+				async (comment: AzDOComment) => {
+					await this.handleSaveEditedComment(comment);
+				},
+			),
+			vscode.commands.registerCommand(
+				"azdo-pr-comments.cancelEditComment",
+				async (comment: AzDOComment) => {
+					await this.handleCancelEditComment(comment);
+				},
+			),
+			vscode.commands.registerCommand(
 				"azdo-pr-comments.deleteComment",
 				async (comment: AzDOComment) => {
 					await this.handleDeleteComment(comment);
@@ -147,6 +159,21 @@ export class PRCommentController {
 					await this.handleUnresolveThread(thread);
 				},
 			),
+			vscode.commands.registerCommand(
+				"azdo-pr-comments.applySuggestion",
+				async (comment: AzDOComment) => {
+					await this.handleApplySuggestion(comment);
+				},
+			),
+			vscode.commands.registerCommand("azdo-pr-comments.collapseAllThreads", async () => {
+				await this.handleCollapseAllThreads();
+			}),
+			vscode.commands.registerCommand("azdo-pr-comments.expandAllThreads", async () => {
+				await this.handleExpandAllThreads();
+			}),
+			vscode.commands.registerCommand("azdo-pr-comments.addFileComment", async () => {
+				await this.handleAddFileComment();
+			}),
 		);
 	}
 
@@ -470,33 +497,43 @@ export class PRCommentController {
 	}
 
 	/**
-	 * Handle comment edit (in-place, no reload!)
+	 * Handle comment edit (enter edit mode)
 	 */
 	private async handleEditComment(comment: AzDOComment): Promise<void> {
 		try {
-			const currentContent = comment.getEditableContent();
+			comment.startEdit();
+			// Force thread to update (trigger UI refresh)
+			const thread = comment.getThread() as AzDOCommentThread;
+			thread.comments = [...thread.comments];
+		} catch (error) {
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to enter edit mode", error));
+			logger.error("Error entering edit mode", error);
+		}
+	}
 
-			// Prompt user to edit
-			const newContent = await vscode.window.showInputBox({
-				value: currentContent,
-				prompt: "Edit your comment",
-				ignoreFocusOut: true,
-				validateInput: (value) => {
-					if (!value.trim()) {
-						return "Comment cannot be empty";
-					}
-					return null;
-				},
-			});
-
-			if (!newContent || newContent === currentContent) {
-				return; // User cancelled or no changes
+	/**
+	 * Handle save edited comment
+	 */
+	private async handleSaveEditedComment(comment: AzDOComment): Promise<void> {
+		try {
+			const newContent = comment.getEditedContent().trim();
+			if (!newContent) {
+				vscode.window.showWarningMessage("Comment cannot be empty");
+				return;
 			}
 
 			// Find the thread containing this comment
 			const thread = comment.getThread() as AzDOCommentThread;
 			if (!thread || !thread.threadId || !thread.prContext) {
 				throw new Error("Could not find comment thread");
+			}
+
+			// Check if content actually changed
+			if (newContent === comment.getEditableContent()) {
+				// No changes, just exit edit mode
+				comment.cancelEdit();
+				thread.comments = [...thread.comments];
+				return;
 			}
 
 			// Update comment on server
@@ -520,11 +557,30 @@ export class PRCommentController {
 
 			// Update comment in place (no reload!)
 			comment.applyEdit(newContent);
+			comment.mode = vscode.CommentMode.Preview;
+
+			// Force thread to update
+			thread.comments = [...thread.comments];
 
 			vscode.window.showInformationMessage("Comment updated successfully");
 		} catch (error) {
-			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to edit comment", error));
-			logger.error("Error editing comment", error);
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to save comment", error));
+			logger.error("Error saving comment", error);
+		}
+	}
+
+	/**
+	 * Handle cancel edit comment
+	 */
+	private async handleCancelEditComment(comment: AzDOComment): Promise<void> {
+		try {
+			comment.cancelEdit();
+			// Force thread to update (trigger UI refresh)
+			const thread = comment.getThread() as AzDOCommentThread;
+			thread.comments = [...thread.comments];
+		} catch (error) {
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to cancel edit", error));
+			logger.error("Error cancelling edit", error);
 		}
 	}
 
@@ -661,6 +717,88 @@ export class PRCommentController {
 	}
 
 	/**
+	 * Handle apply suggestion - apply the suggested code to the local file
+	 */
+	private async handleApplySuggestion(comment: AzDOComment): Promise<void> {
+		try {
+			const suggestion = comment.extractSuggestion();
+			if (!suggestion) {
+				vscode.window.showErrorMessage("Could not extract suggestion from comment");
+				return;
+			}
+
+			const thread = comment.getThread() as AzDOCommentThread;
+			if (!thread) {
+				vscode.window.showErrorMessage("Could not find comment thread");
+				return;
+			}
+
+			// Get the PR file context to find the actual file
+			const contextManager = PRContextManager.getInstance();
+			const fileContext = contextManager.getPRFileContext(thread.uri);
+
+			if (!fileContext) {
+				vscode.window.showErrorMessage("Could not find file context for this comment");
+				return;
+			}
+
+			// Find the local workspace file
+			const workspaceFolders = vscode.workspace.workspaceFolders;
+			if (!workspaceFolders || workspaceFolders.length === 0) {
+				vscode.window.showErrorMessage(
+					"No workspace folder open. Please open the repository first.",
+				);
+				return;
+			}
+
+			// Try to find the file in the workspace
+			const localFilePath = vscode.Uri.joinPath(workspaceFolders[0].uri, fileContext.filePath);
+
+			try {
+				await vscode.workspace.fs.stat(localFilePath);
+			} catch {
+				vscode.window.showErrorMessage(
+					`File not found locally: ${fileContext.filePath}. Make sure you have the repository checked out.`,
+				);
+				return;
+			}
+
+			// Open the document and apply the edit
+			const document = await vscode.workspace.openTextDocument(localFilePath);
+			const lineIndex = suggestion.originalLine - 1; // Convert to 0-based
+
+			if (lineIndex < 0 || lineIndex >= document.lineCount) {
+				vscode.window.showErrorMessage(
+					`Line ${suggestion.originalLine} is out of range for file ${fileContext.filePath}`,
+				);
+				return;
+			}
+
+			// Create a workspace edit to replace the line
+			const edit = new vscode.WorkspaceEdit();
+			const lineRange = document.lineAt(lineIndex).range;
+			edit.replace(localFilePath, lineRange, suggestion.content);
+
+			// Apply the edit
+			const success = await vscode.workspace.applyEdit(edit);
+
+			if (success) {
+				// Show the document so user can see the change
+				await vscode.window.showTextDocument(document, { preview: false });
+				vscode.window.showInformationMessage("Suggestion applied successfully");
+				logger.info(
+					`Applied suggestion from comment ${comment.commentId} to ${fileContext.filePath}:${suggestion.originalLine}`,
+				);
+			} else {
+				vscode.window.showErrorMessage("Failed to apply suggestion");
+			}
+		} catch (error) {
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to apply suggestion", error));
+			logger.error("Error applying suggestion", error);
+		}
+	}
+
+	/**
 	 * Clear comments for a specific document
 	 */
 	public clearCommentsForDocument(uri: vscode.Uri): void {
@@ -678,6 +816,99 @@ export class PRCommentController {
 			if (editor.document.uri.scheme === "azdo-pr") {
 				await this.loadCommentsForDocument(editor.document);
 			}
+		}
+	}
+
+	/**
+	 * Handle collapse all comment threads
+	 */
+	private async handleCollapseAllThreads(): Promise<void> {
+		const editor = vscode.window.activeTextEditor;
+		if (editor && editor.document.uri.scheme === "azdo-pr") {
+			this.threadManager.collapseAllThreads(editor.document.uri);
+			vscode.window.showInformationMessage("All comment threads collapsed");
+		} else {
+			vscode.window.showWarningMessage("No PR diff file is active");
+		}
+	}
+
+	/**
+	 * Handle expand all comment threads
+	 */
+	private async handleExpandAllThreads(): Promise<void> {
+		const editor = vscode.window.activeTextEditor;
+		if (editor && editor.document.uri.scheme === "azdo-pr") {
+			this.threadManager.expandAllThreads(editor.document.uri);
+			vscode.window.showInformationMessage("All comment threads expanded");
+		} else {
+			vscode.window.showWarningMessage("No PR diff file is active");
+		}
+	}
+
+	/**
+	 * Handle adding a file-level comment
+	 */
+	private async handleAddFileComment(): Promise<void> {
+		try {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.document.uri.scheme !== "azdo-pr") {
+				vscode.window.showWarningMessage("No PR diff file is active");
+				return;
+			}
+
+			// Get PR context
+			const contextManager = PRContextManager.getInstance();
+			const fileContext = contextManager.getPRFileContext(editor.document.uri);
+
+			if (!fileContext) {
+				vscode.window.showErrorMessage("No PR context found for this file");
+				return;
+			}
+
+			// Prompt for comment text
+			const commentText = await vscode.window.showInputBox({
+				prompt: "Enter your file-level comment",
+				placeHolder: "Type your comment...",
+				ignoreFocusOut: true,
+				validateInput: (value) => {
+					if (!value.trim()) {
+						return "Comment cannot be empty";
+					}
+					return null;
+				},
+			});
+
+			if (!commentText) {
+				return; // User cancelled
+			}
+
+			const pr = fileContext.pullRequest;
+
+			// Create file-level thread
+			await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: "Adding file comment...",
+					cancellable: false,
+				},
+				async () => {
+					await this.azureDevOpsClient.createFileLevelThread(
+						pr.repository.project.id,
+						pr.repository.id,
+						pr.pullRequestId,
+						fileContext.filePath,
+						commentText,
+					);
+				},
+			);
+
+			// Reload comments to show the new thread
+			await this.loadCommentsForDocument(editor.document);
+
+			vscode.window.showInformationMessage("File comment added successfully");
+		} catch (error) {
+			vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to add file comment", error));
+			logger.error("Error adding file comment", error);
 		}
 	}
 

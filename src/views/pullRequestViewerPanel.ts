@@ -11,7 +11,7 @@ import { PdfFileHandler } from "../services/lfs/handlers/pdfHandler";
 import { LfsService } from "../services/lfs/lfsService";
 import { PRCacheService } from "../services/prCache";
 import { PRContextManager, type PRFileContext } from "../services/prContextManager";
-import { ReviewedFilesService } from "../services/reviewedFilesService";
+import type { ReviewedFilesService } from "../services/reviewedFilesService";
 import {
 	cleanCommentContent,
 	formatTimeAgo,
@@ -46,12 +46,15 @@ export class PullRequestViewerPanel {
 
 	private readonly _panel: vscode.WebviewPanel;
 	private readonly _disposables: vscode.Disposable[] = [];
+	private currentUserId?: string;
 
 	private constructor(
 		panel: vscode.WebviewPanel,
 		private readonly azureDevOpsClient: AzureDevOpsClient,
 		private pullRequest: PullRequest,
+		currentUserId?: string,
 	) {
+		this.currentUserId = currentUserId;
 		this._panel = panel;
 
 		// Set the current PR context
@@ -87,6 +90,21 @@ export class PullRequestViewerPanel {
 					case "toggleFileReviewed":
 						await this._handleToggleReviewed(message.filePath);
 						break;
+					case "replyToThread":
+						await this._handleReplyToThread(message.threadId, message.content);
+						break;
+					case "editComment":
+						await this._handleEditComment(message.threadId, message.commentId, message.content);
+						break;
+					case "deleteComment":
+						await this._handleDeleteComment(message.threadId, message.commentId);
+						break;
+					case "resolveThread":
+						await this._handleResolveThread(message.threadId);
+						break;
+					case "unresolveThread":
+						await this._handleUnresolveThread(message.threadId);
+						break;
 					default:
 						logger.debug("Unknown command:", message.command);
 				}
@@ -108,11 +126,21 @@ export class PullRequestViewerPanel {
 			? vscode.window.activeTextEditor.viewColumn
 			: undefined;
 
+		// Get current user ID for permission checks on comments
+		let currentUserId: string | undefined;
+		try {
+			const currentUser = await azureDevOpsClient.getCurrentUser();
+			currentUserId = currentUser?.id;
+		} catch (error) {
+			logger.warn("Failed to get current user for comment permissions", error);
+		}
+
 		// If we already have a panel, show it
 		if (PullRequestViewerPanel.currentPanel) {
 			PullRequestViewerPanel.currentPanel._panel.reveal(column);
 			// Update with new PR data
 			PullRequestViewerPanel.currentPanel.pullRequest = pullRequest;
+			PullRequestViewerPanel.currentPanel.currentUserId = currentUserId;
 			await PullRequestViewerPanel.currentPanel._update();
 			return;
 		}
@@ -129,7 +157,12 @@ export class PullRequestViewerPanel {
 			},
 		);
 
-		const instance = new PullRequestViewerPanel(panel, azureDevOpsClient, pullRequest);
+		const instance = new PullRequestViewerPanel(
+			panel,
+			azureDevOpsClient,
+			pullRequest,
+			currentUserId,
+		);
 		PullRequestViewerPanel._currentPanel = instance;
 
 		// Initialize the panel content asynchronously
@@ -531,6 +564,134 @@ export class PullRequestViewerPanel {
 		} catch (error) {
 			logger.error("Error toggling reviewed state:", error);
 		}
+	}
+
+	/**
+	 * Handle reply to a thread from webview
+	 */
+	private async _handleReplyToThread(threadId: number, content: string): Promise<void> {
+		try {
+			if (!content.trim()) {
+				this._sendMessageToWebview({ type: "error", message: "Reply cannot be empty" });
+				return;
+			}
+
+			await this.azureDevOpsClient.replyToPRThread(
+				this.pullRequest.repository.project.id,
+				this.pullRequest.repository.id,
+				this.pullRequest.pullRequestId,
+				threadId,
+				content,
+			);
+
+			// Refresh the view to show the new reply
+			await this.refreshWithFreshData();
+			this._sendMessageToWebview({ type: "success", message: "Reply added successfully" });
+		} catch (error) {
+			logger.error("Failed to reply to thread", error);
+			this._sendMessageToWebview({ type: "error", message: "Failed to add reply" });
+		}
+	}
+
+	/**
+	 * Handle edit comment from webview
+	 */
+	private async _handleEditComment(
+		threadId: number,
+		commentId: number,
+		content: string,
+	): Promise<void> {
+		try {
+			if (!content.trim()) {
+				this._sendMessageToWebview({ type: "error", message: "Comment cannot be empty" });
+				return;
+			}
+
+			await this.azureDevOpsClient.updateComment(
+				this.pullRequest.repository.project.id,
+				this.pullRequest.repository.id,
+				this.pullRequest.pullRequestId,
+				threadId,
+				commentId,
+				content,
+			);
+
+			await this.refreshWithFreshData();
+			this._sendMessageToWebview({ type: "success", message: "Comment updated successfully" });
+		} catch (error) {
+			logger.error("Failed to edit comment", error);
+			this._sendMessageToWebview({ type: "error", message: "Failed to update comment" });
+		}
+	}
+
+	/**
+	 * Handle delete comment from webview
+	 */
+	private async _handleDeleteComment(threadId: number, commentId: number): Promise<void> {
+		try {
+			await this.azureDevOpsClient.deleteComment(
+				this.pullRequest.repository.project.id,
+				this.pullRequest.repository.id,
+				this.pullRequest.pullRequestId,
+				threadId,
+				commentId,
+			);
+
+			await this.refreshWithFreshData();
+			this._sendMessageToWebview({ type: "success", message: "Comment deleted successfully" });
+		} catch (error) {
+			logger.error("Failed to delete comment", error);
+			this._sendMessageToWebview({ type: "error", message: "Failed to delete comment" });
+		}
+	}
+
+	/**
+	 * Handle resolve thread from webview
+	 */
+	private async _handleResolveThread(threadId: number): Promise<void> {
+		try {
+			await this.azureDevOpsClient.updateThreadStatus(
+				this.pullRequest.repository.project.id,
+				this.pullRequest.repository.id,
+				this.pullRequest.pullRequestId,
+				threadId,
+				2, // THREAD_STATUS.RESOLVED
+			);
+
+			await this.refreshWithFreshData();
+			this._sendMessageToWebview({ type: "success", message: "Thread resolved" });
+		} catch (error) {
+			logger.error("Failed to resolve thread", error);
+			this._sendMessageToWebview({ type: "error", message: "Failed to resolve thread" });
+		}
+	}
+
+	/**
+	 * Handle unresolve thread from webview
+	 */
+	private async _handleUnresolveThread(threadId: number): Promise<void> {
+		try {
+			await this.azureDevOpsClient.updateThreadStatus(
+				this.pullRequest.repository.project.id,
+				this.pullRequest.repository.id,
+				this.pullRequest.pullRequestId,
+				threadId,
+				1, // THREAD_STATUS.ACTIVE
+			);
+
+			await this.refreshWithFreshData();
+			this._sendMessageToWebview({ type: "success", message: "Thread reopened" });
+		} catch (error) {
+			logger.error("Failed to unresolve thread", error);
+			this._sendMessageToWebview({ type: "error", message: "Failed to reopen thread" });
+		}
+	}
+
+	/**
+	 * Send message to webview
+	 */
+	private _sendMessageToWebview(message: { type: string; message: string }): void {
+		this._panel.webview.postMessage(message);
 	}
 
 	/**
@@ -1766,6 +1927,85 @@ export class PullRequestViewerPanel {
             .comment-reply .comment-body {
                 font-size: 12px;
             }
+
+            /* Interactive comment styles */
+            .thread-actions {
+                display: flex;
+                gap: 8px;
+            }
+            .thread-action-btn, .reply-toggle-btn, .submit-reply-btn, .cancel-reply-btn {
+                padding: 4px 12px;
+                font-size: 12px;
+                border: 1px solid var(--vscode-button-border);
+                border-radius: 4px;
+                background: var(--vscode-button-secondaryBackground);
+                color: var(--vscode-button-secondaryForeground);
+                cursor: pointer;
+            }
+            .thread-action-btn:hover, .reply-toggle-btn:hover {
+                background: var(--vscode-button-secondaryHoverBackground);
+            }
+            .submit-reply-btn {
+                background: var(--vscode-button-background);
+                color: var(--vscode-button-foreground);
+            }
+            .submit-reply-btn:hover {
+                background: var(--vscode-button-hoverBackground);
+            }
+            .reply-section {
+                margin-top: 12px;
+                border-top: 1px solid var(--vscode-panel-border);
+                padding-top: 12px;
+            }
+            .reply-form {
+                margin-top: 8px;
+            }
+            .reply-textarea {
+                width: 100%;
+                padding: 8px;
+                font-family: var(--vscode-font-family);
+                font-size: var(--vscode-font-size);
+                background: var(--vscode-input-background);
+                color: var(--vscode-input-foreground);
+                border: 1px solid var(--vscode-input-border);
+                border-radius: 4px;
+                resize: vertical;
+                box-sizing: border-box;
+            }
+            .reply-form-actions {
+                display: flex;
+                gap: 8px;
+                margin-top: 8px;
+                justify-content: flex-end;
+            }
+            .comment-actions {
+                display: flex;
+                gap: 8px;
+                margin-top: 4px;
+            }
+            .edit-comment-btn, .delete-comment-btn {
+                padding: 2px 8px;
+                font-size: 11px;
+                border: 1px solid var(--vscode-button-border);
+                border-radius: 3px;
+                background: transparent;
+                color: var(--vscode-foreground);
+                cursor: pointer;
+                opacity: 0.7;
+            }
+            .edit-comment-btn:hover, .delete-comment-btn:hover {
+                opacity: 1;
+                background: var(--vscode-button-secondaryBackground);
+            }
+            .delete-comment-btn:hover {
+                background: var(--vscode-errorForeground);
+                color: white;
+            }
+            .comment-header-right {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
         </style>`;
 	}
 
@@ -2132,8 +2372,15 @@ export class PullRequestViewerPanel {
 				const content = cleanCommentContent(rawContent);
 				const replyCount = thread.comments.length - 1;
 
+				// Check if current user can edit this comment
+				const canEditFirstComment =
+					this.currentUserId && firstComment.author?.id === this.currentUserId;
+
 				// Get status info - only show badge for meaningful statuses
 				const statusLabel = getThreadStatusLabel(thread.status);
+				const statusNum =
+					typeof thread.status === "string" ? Number.parseInt(thread.status, 10) : thread.status;
+				const isResolved = statusNum === 2 || statusNum === 4;
 				let statusBadge = "";
 
 				// Only show status badges for specific non-active states
@@ -2142,11 +2389,9 @@ export class PullRequestViewerPanel {
 					!statusLabel.startsWith("Unknown") &&
 					!statusLabel.startsWith("Not Set")
 				) {
-					const statusNum =
-						typeof thread.status === "string" ? Number.parseInt(thread.status, 10) : thread.status;
 					let badgeClass = "status-badge-unknown";
 
-					if (statusNum === 2 || statusNum === 4) {
+					if (isResolved) {
 						badgeClass = "status-badge-resolved";
 					} else if (statusNum === 3 || statusNum === 5) {
 						badgeClass = "status-badge-wontfix";
@@ -2159,7 +2404,28 @@ export class PullRequestViewerPanel {
 
 				const timeAgo = formatTimeAgo(thread.lastUpdatedDate);
 
-				// Build replies HTML
+				// Thread actions (resolve/unresolve)
+				const threadActionsHtml = `
+					<div class="thread-actions">
+						${
+							!isResolved
+								? `<button class="thread-action-btn resolve-btn" data-thread-id="${thread.id}" title="Resolve thread">Resolve</button>`
+								: `<button class="thread-action-btn unresolve-btn" data-thread-id="${thread.id}" title="Reopen thread">Reopen</button>`
+						}
+					</div>
+				`;
+
+				// Comment actions for first comment (edit/delete) - only for own comments
+				const firstCommentActionsHtml = canEditFirstComment
+					? `
+					<div class="comment-actions">
+						<button class="edit-comment-btn" data-thread-id="${thread.id}" data-comment-id="${firstComment.id}" title="Edit">Edit</button>
+						<button class="delete-comment-btn" data-thread-id="${thread.id}" data-comment-id="${firstComment.id}" title="Delete">Delete</button>
+					</div>
+				`
+					: "";
+
+				// Build replies HTML with edit/delete buttons for own comments
 				let repliesHtml = "";
 				if (replyCount > 0) {
 					const replies = thread.comments
@@ -2169,14 +2435,25 @@ export class PullRequestViewerPanel {
 							const rawReplyContent = comment.content || "[No content]";
 							const replyContent = cleanCommentContent(rawReplyContent);
 							const replyTime = formatTimeAgo(comment.publishedDate);
+							const canEditReply = this.currentUserId && comment.author?.id === this.currentUserId;
+
+							const replyActionsHtml = canEditReply
+								? `
+								<div class="comment-actions">
+									<button class="edit-comment-btn" data-thread-id="${thread.id}" data-comment-id="${comment.id}" title="Edit">Edit</button>
+									<button class="delete-comment-btn" data-thread-id="${thread.id}" data-comment-id="${comment.id}" title="Delete">Delete</button>
+								</div>
+							`
+								: "";
 
 							return `
-                        <div class="comment-reply">
+                        <div class="comment-reply" data-comment-id="${comment.id}">
                             <div class="comment-reply-header">
                                 <span class="comment-author">${this._escapeHtml(replyAuthor)}</span>
                                 <span class="comment-time">${replyTime}</span>
                             </div>
                             <div class="comment-body">${this._escapeHtml(replyContent)}</div>
+                            ${replyActionsHtml}
                         </div>`;
 						})
 						.join("");
@@ -2184,17 +2461,36 @@ export class PullRequestViewerPanel {
 					repliesHtml = `<div class="comment-replies">${replies}</div>`;
 				}
 
+				// Reply form
+				const replyFormHtml = `
+					<div class="reply-section">
+						<button class="reply-toggle-btn" data-thread-id="${thread.id}">Reply</button>
+						<div class="reply-form" id="reply-form-${thread.id}" style="display: none;">
+							<textarea class="reply-textarea" id="reply-textarea-${thread.id}" placeholder="Write a reply..." rows="3"></textarea>
+							<div class="reply-form-actions">
+								<button class="submit-reply-btn" data-thread-id="${thread.id}">Submit</button>
+								<button class="cancel-reply-btn" data-thread-id="${thread.id}">Cancel</button>
+							</div>
+						</div>
+					</div>
+				`;
+
 				return `
-                <div class="general-comment-thread">
+                <div class="general-comment-thread" data-thread-id="${thread.id}">
                     <div class="comment-header">
                         <div class="comment-header-left">
                             <span class="comment-author">${this._escapeHtml(authorName)}</span>
                             <span class="comment-time">${timeAgo}</span>
                         </div>
-                        ${statusBadge ? `<div class="comment-header-right">${statusBadge}</div>` : ""}
+                        <div class="comment-header-right">
+                            ${statusBadge}
+                            ${threadActionsHtml}
+                        </div>
                     </div>
-                    <div class="comment-body">${this._escapeHtml(content)}</div>
+                    <div class="comment-body" data-comment-id="${firstComment.id}">${this._escapeHtml(content)}</div>
+                    ${firstCommentActionsHtml}
                     ${repliesHtml}
+                    ${replyFormHtml}
                 </div>`;
 			})
 			.filter((html) => html !== "")
@@ -2276,7 +2572,9 @@ export class PullRequestViewerPanel {
 					) || false;
 
 				// Always show reviewed badge (filled when reviewed, outline when not)
-				const reviewedClass = isReviewed ? "reviewed-badge reviewed" : "reviewed-badge not-reviewed";
+				const reviewedClass = isReviewed
+					? "reviewed-badge reviewed"
+					: "reviewed-badge not-reviewed";
 				const reviewedTitle = isReviewed
 					? "Reviewed - Click to mark as not reviewed"
 					: "Not reviewed - Click to mark as reviewed";
@@ -2427,9 +2725,81 @@ export class PullRequestViewerPanel {
                             console.error('Error posting refresh message:', error);
                         }
                     }
+
+                    // Handle reply toggle button clicks
+                    const replyToggleBtn = target.closest('.reply-toggle-btn');
+                    if (replyToggleBtn) {
+                        const threadId = replyToggleBtn.getAttribute('data-thread-id');
+                        const form = document.getElementById('reply-form-' + threadId);
+                        if (form) {
+                            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+                        }
+                    }
+
+                    // Handle submit reply button clicks
+                    const submitReplyBtn = target.closest('.submit-reply-btn');
+                    if (submitReplyBtn) {
+                        const threadId = parseInt(submitReplyBtn.getAttribute('data-thread-id'), 10);
+                        const textarea = document.getElementById('reply-textarea-' + threadId);
+                        const content = textarea ? textarea.value.trim() : '';
+                        if (content) {
+                            vscode.postMessage({ command: 'replyToThread', threadId: threadId, content: content });
+                            textarea.value = '';
+                            const form = document.getElementById('reply-form-' + threadId);
+                            if (form) form.style.display = 'none';
+                        }
+                    }
+
+                    // Handle cancel reply button clicks
+                    const cancelReplyBtn = target.closest('.cancel-reply-btn');
+                    if (cancelReplyBtn) {
+                        const threadId = cancelReplyBtn.getAttribute('data-thread-id');
+                        const form = document.getElementById('reply-form-' + threadId);
+                        if (form) form.style.display = 'none';
+                        const textarea = document.getElementById('reply-textarea-' + threadId);
+                        if (textarea) textarea.value = '';
+                    }
+
+                    // Handle resolve thread button clicks
+                    const resolveBtn = target.closest('.resolve-btn');
+                    if (resolveBtn) {
+                        const threadId = parseInt(resolveBtn.getAttribute('data-thread-id'), 10);
+                        vscode.postMessage({ command: 'resolveThread', threadId: threadId });
+                    }
+
+                    // Handle unresolve thread button clicks
+                    const unresolveBtn = target.closest('.unresolve-btn');
+                    if (unresolveBtn) {
+                        const threadId = parseInt(unresolveBtn.getAttribute('data-thread-id'), 10);
+                        vscode.postMessage({ command: 'unresolveThread', threadId: threadId });
+                    }
+
+                    // Handle delete comment button clicks
+                    const deleteCommentBtn = target.closest('.delete-comment-btn');
+                    if (deleteCommentBtn) {
+                        if (confirm('Are you sure you want to delete this comment?')) {
+                            const threadId = parseInt(deleteCommentBtn.getAttribute('data-thread-id'), 10);
+                            const commentId = parseInt(deleteCommentBtn.getAttribute('data-comment-id'), 10);
+                            vscode.postMessage({ command: 'deleteComment', threadId: threadId, commentId: commentId });
+                        }
+                    }
+
+                    // Handle edit comment button clicks
+                    const editCommentBtn = target.closest('.edit-comment-btn');
+                    if (editCommentBtn) {
+                        const threadId = parseInt(editCommentBtn.getAttribute('data-thread-id'), 10);
+                        const commentId = parseInt(editCommentBtn.getAttribute('data-comment-id'), 10);
+                        const commentThread = editCommentBtn.closest('.general-comment-thread, .comment-reply');
+                        const commentBody = commentThread ? commentThread.querySelector('.comment-body') : null;
+                        const currentContent = commentBody ? commentBody.textContent : '';
+                        const newContent = prompt('Edit your comment:', currentContent);
+                        if (newContent !== null && newContent.trim() !== '') {
+                            vscode.postMessage({ command: 'editComment', threadId: threadId, commentId: commentId, content: newContent });
+                        }
+                    }
                 });
 
-                // Listen for messages from extension (e.g., reviewed state changes)
+                // Listen for messages from extension (e.g., reviewed state changes, success/error notifications)
                 window.addEventListener('message', event => {
                     const message = event.data;
 
@@ -2455,6 +2825,15 @@ export class PullRequestViewerPanel {
                                 console.log('Updated reviewed state for:', message.filePath, 'reviewed:', message.reviewed);
                             }
                         }
+                    }
+
+                    // Handle success/error messages from comment operations
+                    if (message.type === 'success') {
+                        console.log('Success:', message.message);
+                    }
+                    if (message.type === 'error') {
+                        console.error('Error:', message.message);
+                        alert(message.message);
                     }
                 });
             });

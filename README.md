@@ -6,9 +6,26 @@ View and review all your organization's Azure DevOps pull requests directly in V
 
 - **Organization-wide view** - See all PRs across every project and repository
 - **In-editor code review** - View diffs, add comments, and resolve threads
+- **At-a-glance status** - Icon colors show which PRs need your attention
+- **Smart sorting** - PRs needing your review appear first
 - **Smart caching** - Fast performance with automatic refresh
 - **Project filtering** - Focus on specific projects when needed
 - **Git LFS support** - View binary files like PDFs (experimental)
+
+## Sidebar Guide
+
+**Icon Colors**
+| Color | Meaning |
+|-------|---------|
+| 🟠 Orange | Needs your review |
+| 🟢 Green | You approved |
+| 🔴 Red | Blocked or rejected |
+| 🔵 Blue | Your PR |
+| ⚪ Gray | Draft |
+
+**Badges** - Repositories show a count of PRs awaiting your review.
+
+**Sorting** - PRs are ordered by priority: needs review → blocked → waiting → reviewed.
 
 ## Getting Started
 

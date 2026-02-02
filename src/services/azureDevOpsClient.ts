@@ -772,6 +772,76 @@ export class AzureDevOpsClient {
 	}
 
 	/**
+	 * Create a file-level PR thread (not attached to a specific line)
+	 * @param projectId The project ID
+	 * @param repositoryId The repository ID
+	 * @param pullRequestId The pull request ID
+	 * @param filePath The file path in the repository
+	 * @param commentText The comment text
+	 */
+	async createFileLevelThread(
+		projectId: string,
+		repositoryId: string,
+		pullRequestId: number,
+		filePath: string,
+		commentText: string,
+	): Promise<PRThread> {
+		const headers = await this.getAuthHeaders();
+		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/threads?api-version=7.0`;
+
+		// Get the latest iteration
+		const iterations = await this.getPullRequestIterations(projectId, repositoryId, pullRequestId);
+		const latestIteration = iterations.length > 0 ? iterations.at(-1) : null;
+
+		const requestBody: AzDOThreadCreationRequest = {
+			comments: [
+				{
+					parentCommentId: 0,
+					content: commentText,
+					commentType: COMMENT_TYPE.TEXT,
+				},
+			],
+			status: THREAD_STATUS.ACTIVE,
+			threadContext: {
+				filePath: filePath,
+				// No line numbers - this makes it a file-level comment
+			},
+		};
+
+		// Add iteration context if available
+		if (latestIteration) {
+			requestBody.pullRequestThreadContext = {
+				iterationContext: {
+					firstComparingIteration: latestIteration.id,
+					secondComparingIteration: latestIteration.id,
+				},
+			};
+		}
+
+		const response = await this.axiosInstance.post(url, requestBody, {
+			headers,
+		});
+
+		const thread = response.data as AzDOThread;
+		return {
+			id: thread.id,
+			publishedDate: new Date(thread.publishedDate),
+			lastUpdatedDate: new Date(thread.lastUpdatedDate),
+			comments: (thread.comments || []).map((comment: AzDOComment) => ({
+				id: comment.id,
+				parentCommentId: comment.parentCommentId,
+				author: comment.author,
+				content: comment.content,
+				publishedDate: new Date(comment.publishedDate),
+				lastUpdatedDate: new Date(comment.lastUpdatedDate),
+				commentType: comment.commentType,
+			})),
+			status: thread.status,
+			threadContext: thread.threadContext,
+		};
+	}
+
+	/**
 	 * Add a reply comment to an existing PR thread
 	 * @param projectId The project ID
 	 * @param repositoryId The repository ID
