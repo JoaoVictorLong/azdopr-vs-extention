@@ -6,9 +6,36 @@
  */
 
 /**
- * Allowed HTML tags
+ * Sanitization profiles: "strict" for user comments, "markdown" for rendered markdown output.
+ * Two separate sets prevent expanding the comment attack surface when allowing markdown tags.
  */
-const ALLOWED_TAGS = new Set(["span", "b", "strong", "i", "em", "a", "p", "br", "code", "pre"]);
+type SanitizeProfile = "strict" | "markdown";
+
+const STRICT_TAGS = new Set(["span", "b", "strong", "i", "em", "a", "p", "br", "code", "pre"]);
+
+const MARKDOWN_TAGS = new Set([
+	...STRICT_TAGS,
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"ul",
+	"ol",
+	"li",
+	"blockquote",
+	"hr",
+	"table",
+	"thead",
+	"tbody",
+	"tr",
+	"td",
+	"th",
+	"del",
+	"div",
+	"img",
+]);
 
 /**
  * Allowed URL schemes for href attributes
@@ -24,20 +51,25 @@ const DANGEROUS_SCHEMES = ["javascript", "data", "vbscript", "file"];
  * Sanitizes HTML content by allowing only safe tags and attributes.
  *
  * @param html - HTML string to sanitize (can be null or undefined)
+ * @param profile - "strict" for user comments (default), "markdown" for rendered markdown output
  * @returns Sanitized HTML string (empty string if input is null/undefined)
  */
-export function sanitizeHtml(html: string | null | undefined): string {
+export function sanitizeHtml(
+	html: string | null | undefined,
+	profile: SanitizeProfile = "strict",
+): string {
 	if (html == null || html === "") {
 		return "";
 	}
 
+	const allowedTags = profile === "markdown" ? MARKDOWN_TAGS : STRICT_TAGS;
 	let result = html;
 
 	// First, find all tags and process them
 	result = result.replace(/<\/?([a-z][a-z0-9]*)\b[^>]*>/gi, (match, tagName) => {
 		const tag = tagName.toLowerCase();
 
-		if (!ALLOWED_TAGS.has(tag)) {
+		if (!allowedTags.has(tag)) {
 			// Remove disallowed tags entirely
 			return "";
 		}
@@ -47,14 +79,19 @@ export function sanitizeHtml(html: string | null | undefined): string {
 			return sanitizeAnchorTag(match);
 		}
 
+		// img tags - only allow src (with URL validation), alt, title
+		if (tag === "img") {
+			return sanitizeImgTag(match);
+		}
+
 		// For span, code, pre - only allow class attribute
 		if (tag === "span" || tag === "code" || tag === "pre") {
 			return sanitizeTagWithClass(match, tag);
 		}
 
-		// Self-closing tags (br)
-		if (tag === "br") {
-			return "<br>";
+		// Self-closing tags (br, hr)
+		if (tag === "br" || tag === "hr") {
+			return `<${tag}>`;
 		}
 
 		// Other allowed tags - strip all attributes
@@ -104,6 +141,36 @@ function sanitizeAnchorTag(match: string): string {
 		sanitized += ' target="_blank" rel="noopener noreferrer"';
 	}
 
+	sanitized += ">";
+	return sanitized;
+}
+
+/**
+ * Sanitize img tags - allow src (with URL validation), alt, and title only
+ */
+function sanitizeImgTag(match: string): string {
+	const isClosing = match.startsWith("</");
+	if (isClosing) {
+		return "";
+	}
+
+	const srcMatch = match.match(/src\s*=\s*(?:["']([^"']*)["']|([^\s>]+))/i);
+	const src = srcMatch ? srcMatch[1] || srcMatch[2] : null;
+
+	if (!src || !isAllowedUrl(src)) {
+		return "";
+	}
+
+	const altMatch = match.match(/alt\s*=\s*["']([^"']*)["']/i);
+	const alt = altMatch ? altMatch[1] : "";
+
+	const titleMatch = match.match(/title\s*=\s*["']([^"']*)["']/i);
+	const title = titleMatch ? titleMatch[1] : null;
+
+	let sanitized = `<img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt)}"`;
+	if (title) {
+		sanitized += ` title="${escapeAttribute(title)}"`;
+	}
 	sanitized += ">";
 	return sanitized;
 }

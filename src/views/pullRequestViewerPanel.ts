@@ -320,7 +320,7 @@ export class PullRequestViewerPanel {
 
 			const { marked } = await PullRequestViewerPanel.getMarked();
 			const descriptionHtml = this.pullRequest.description
-				? await marked(this.pullRequest.description)
+				? sanitizeHtml(await marked(this.pullRequest.description), "markdown")
 				: "No description provided.";
 
 			const avatarMap = await this._prefetchAvatars(this.pullRequest, threads);
@@ -1513,7 +1513,8 @@ export class PullRequestViewerPanel {
                 display: inline-flex;
                 align-items: center;
                 gap: 4px;
-                padding: 4px 8px;
+                padding: 6px 12px;
+                min-height: 28px;
                 border: 1px solid transparent;
                 border-radius: 3px;
                 cursor: pointer;
@@ -1541,7 +1542,7 @@ export class PullRequestViewerPanel {
                 filter: brightness(1.1);
             }
             .approve-suggestions-btn {
-                background-color: #4a9eff;
+                background-color: var(--vscode-textLink-foreground);
                 color: white;
             }
             .approve-suggestions-btn:hover {
@@ -1555,7 +1556,7 @@ export class PullRequestViewerPanel {
                 filter: brightness(1.1);
             }
             .waiting-btn {
-                background-color: #ffa500;
+                background-color: var(--vscode-charts-orange, var(--vscode-editorWarning-foreground));
                 color: white;
             }
             .waiting-btn:hover {
@@ -1663,10 +1664,10 @@ export class PullRequestViewerPanel {
                 flex-shrink: 0;
             }
             .vote-approved-suggestions {
-                color: #4a9eff;
+                color: var(--vscode-textLink-foreground);
             }
             .vote-waiting-author {
-                color: #ffa500;
+                color: var(--vscode-charts-orange, var(--vscode-editorWarning-foreground));
             }
             /* Avatar styles */
             .avatar {
@@ -1915,7 +1916,7 @@ export class PullRequestViewerPanel {
                 color: white;
             }
             .status-badge-pending {
-                background-color: #ffa500;
+                background-color: var(--vscode-charts-orange, var(--vscode-editorWarning-foreground));
                 color: white;
             }
             .status-badge-unknown {
@@ -2087,11 +2088,13 @@ export class PullRequestViewerPanel {
                 display: flex;
                 gap: 8px;
                 margin-top: 12px;
-                opacity: 0;
+                opacity: 0.4;
                 transition: opacity 0.15s ease-in-out;
             }
             .general-comment-thread:hover > .comment-actions,
-            .comment-reply:hover > .comment-actions {
+            .comment-reply:hover > .comment-actions,
+            .general-comment-thread:focus-within > .comment-actions,
+            .comment-reply:focus-within > .comment-actions {
                 opacity: 1;
             }
             .edit-comment-btn, .delete-comment-btn {
@@ -2129,13 +2132,13 @@ export class PullRequestViewerPanel {
 		).length;
 
 		return `
-        <div class="tab-navigation">
-            <button class="tab-button active" data-tab="conversation">
+        <div class="tab-navigation" role="tablist">
+            <button class="tab-button active" data-tab="conversation" role="tab" id="tab-conversation" aria-selected="true" aria-controls="panel-conversation">
                 <span class="tab-icon">💬</span>
                 Conversation
                 ${generalCommentCount > 0 ? `<span class="tab-badge">${generalCommentCount}</span>` : ""}
             </button>
-            <button class="tab-button" data-tab="files">
+            <button class="tab-button" data-tab="files" role="tab" id="tab-files" aria-selected="false" aria-controls="panel-files">
                 <span class="tab-icon">📄</span>
                 Files Changed
                 <span class="tab-badge">${fileCount}</span>
@@ -2150,7 +2153,7 @@ export class PullRequestViewerPanel {
 		avatarMap: Map<string, string> = new Map(),
 	): string {
 		return `
-        <div class="tab-panel active" data-panel="conversation">
+        <div class="tab-panel active" data-panel="conversation" role="tabpanel" id="panel-conversation" aria-labelledby="tab-conversation">
             <div class="conversation-layout">
                 <div class="conversation-sidebar">
                     ${this._getCombinedReviewsHtml(pr, avatarMap)}
@@ -2165,7 +2168,7 @@ export class PullRequestViewerPanel {
 
 	private _getFilesTabHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
 		return `
-        <div class="tab-panel" data-panel="files">
+        <div class="tab-panel" data-panel="files" role="tabpanel" id="panel-files" aria-labelledby="tab-files">
             ${this._getFileChangesHtml(fileChanges, threads)}
         </div>`;
 	}
@@ -2654,7 +2657,7 @@ export class PullRequestViewerPanel {
 					<div class="reply-section">
 						<button class="reply-toggle-btn" data-thread-id="${thread.id}">Reply</button>
 						<div class="reply-form" id="reply-form-${thread.id}" style="display: none;">
-							<textarea class="reply-textarea" id="reply-textarea-${thread.id}" placeholder="Write a reply..." rows="3"></textarea>
+							<textarea class="reply-textarea" id="reply-textarea-${thread.id}" placeholder="Write a reply..." rows="3" aria-label="Write a reply"></textarea>
 							<div class="reply-form-actions">
 								<button class="submit-reply-btn" data-thread-id="${thread.id}">Submit</button>
 								<button class="cancel-reply-btn" data-thread-id="${thread.id}">Cancel</button>
@@ -2730,7 +2733,7 @@ export class PullRequestViewerPanel {
 
 				if (change.changeType?.includes("rename") && change.originalPath) {
 					const originalFileName = change.originalPath.split("/").pop() || change.originalPath;
-					displayFileName = `${escapeHtml(originalFileName)} → ${escapeHtml(fileName)}`;
+					displayFileName = `${originalFileName} → ${fileName}`;
 				}
 
 				let normalizedPath = change.item?.path || "";
@@ -2762,7 +2765,7 @@ export class PullRequestViewerPanel {
 				const reviewedBadge = `<span class="${reviewedClass}" data-action="toggle-reviewed" title="${reviewedTitle}">✓</span>`;
 
 				return `
-                <li class="file-item" data-file-path="${escapeHtml(change.item?.path)}" data-change-type="${escapeHtml(change.changeType)}" data-original-path="${escapeHtml(change.originalPath || "")}" data-file-index="${index}">
+                <li class="file-item" tabindex="0" role="button" data-file-path="${escapeHtml(change.item?.path)}" data-change-type="${escapeHtml(change.changeType)}" data-original-path="${escapeHtml(change.originalPath || "")}" data-file-index="${index}">
                     <span class="file-change-type ${changeTypeClass}">${changeTypeText}</span>
                     <div class="file-info">
                         <span class="file-name">${escapeHtml(displayFileName)}</span>
@@ -2797,19 +2800,49 @@ export class PullRequestViewerPanel {
                     button.addEventListener('click', function() {
                         const tabName = this.getAttribute('data-tab');
 
-                        // Remove active class from all buttons and panels
-                        document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+                        // Remove active class and aria-selected from all buttons and panels
+                        document.querySelectorAll('.tab-button').forEach(btn => {
+                            btn.classList.remove('active');
+                            btn.setAttribute('aria-selected', 'false');
+                        });
                         document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
 
-                        // Add active class to clicked button and corresponding panel
+                        // Add active class and aria-selected to clicked button and corresponding panel
                         this.classList.add('active');
+                        this.setAttribute('aria-selected', 'true');
                         const panel = document.querySelector(\`[data-panel="\${tabName}"]\`);
                         if (panel) {
                             panel.classList.add('active');
                         }
-
-                        console.log('Switched to tab:', tabName);
                     });
+                });
+
+                // Keyboard navigation: Enter/Space activates clickable elements, Ctrl+Enter submits reply
+                document.addEventListener('keydown', function(event) {
+                    const target = event.target;
+
+                    // Enter/Space on file items and buttons
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        const fileItem = target.closest('.file-item');
+                        if (fileItem && target === fileItem) {
+                            event.preventDefault();
+                            fileItem.click();
+                            return;
+                        }
+                    }
+
+                    // Ctrl+Enter on reply textareas to submit
+                    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                        const textarea = target.closest('.reply-textarea');
+                        if (textarea) {
+                            event.preventDefault();
+                            const threadId = textarea.id.replace('reply-textarea-', '');
+                            const submitBtn = document.querySelector(\`.submit-reply-btn[data-thread-id="\${threadId}"]\`);
+                            if (submitBtn) {
+                                submitBtn.click();
+                            }
+                        }
+                    }
                 });
 
                 // Add click handlers to all file items
