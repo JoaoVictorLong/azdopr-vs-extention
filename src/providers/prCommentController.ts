@@ -10,58 +10,25 @@ import { Logger } from "../utils/logger";
 
 const logger = Logger.getInstance();
 
-/**
- * ============================================================================
- * PRCommentController - REWRITTEN FOR FLICKER-FREE PERFORMANCE
- * ============================================================================
- *
- * This is a complete rewrite of the comment controller using patterns from
- * the GitHub PR extension. Key improvements:
- *
- * 1. DIFFERENTIAL UPDATES: Comments are updated in-place, not disposed/recreated
- * 2. OPTIMISTIC UPDATES: New comments appear immediately before server confirms
- * 3. NO FLICKERING: Thread state is preserved across updates
- * 4. BETTER STATE MANAGEMENT: Temporary vs confirmed comments
- * 5. DEBOUNCING: Prevents duplicate loads from racing events
- *
- * HOW IT WORKS:
- * - CommentThreadManager tracks all threads and handles differential updates
- * - AzDOComment and TemporaryComment classes manage comment lifecycle
- * - loadCommentsForDocument syncs threads instead of recreating them
- * - Optimistic updates show temporary comments immediately
- * - In-place editing updates comment objects without full reload
- *
- * @see CommentThreadManager for thread lifecycle
- * @see AzDOComment for comment state management
- * @see TemporaryComment for optimistic updates
- */
 export class PRCommentController {
 	private readonly commentController: vscode.CommentController;
 	private readonly threadManager: CommentThreadManager;
 	private readonly disposables: vscode.Disposable[] = [];
 
-	/** Prevent duplicate loads for the same document */
 	private readonly loadingPromises: Map<string, Promise<void>> = new Map();
-
-	/** Debounce timers to coalesce rapid events */
 	private readonly debounceTimers: Map<string, NodeJS.Timeout> = new Map();
-
-	/** Current user ID for permission checks */
 	private currentUserId?: string;
 
 	constructor(private readonly azureDevOpsClient: AzureDevOpsClient) {
 		logger.info("PRCommentController: Initializing comment controller");
 
-		// Create the comment controller
 		this.commentController = vscode.comments.createCommentController(
 			"azdo-pr-comments",
 			"Azure DevOps PR Viewer Comments",
 		);
 
-		// Initialize thread manager
 		this.threadManager = new CommentThreadManager(this.commentController);
 
-		// Configure comment controller options
 		this.commentController.options = {
 			prompt: "Add a comment",
 			placeHolder: "Write your comment here...",
@@ -71,10 +38,6 @@ export class PRCommentController {
 		this.registerCommands();
 	}
 
-	/**
-	 * Initialize the comment controller
-	 * Fetch current user for permission checks
-	 */
 	public async initialize(): Promise<void> {
 		try {
 			const currentUser = await this.azureDevOpsClient.getCurrentUser();
@@ -84,7 +47,6 @@ export class PRCommentController {
 			logger.warn("PRCommentController: Failed to get current user", error);
 		}
 
-		// Load comments for the current editor if it's a PR diff
 		if (vscode.window.activeTextEditor) {
 			const doc = vscode.window.activeTextEditor.document;
 			if (doc.uri.scheme === "azdo-pr") {
@@ -96,13 +58,9 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Setup the commenting range provider
-	 */
 	private setupCommentingRangeProvider(): void {
 		this.commentController.commentingRangeProvider = {
 			provideCommentingRanges: (document: vscode.TextDocument): vscode.Range[] | undefined => {
-				// Allow commenting on any line in PR diff documents
 				if (document.uri.scheme === "azdo-pr") {
 					const lineCount = document.lineCount;
 					return [new vscode.Range(0, 0, lineCount - 1, 0)];
@@ -112,9 +70,6 @@ export class PRCommentController {
 		};
 	}
 
-	/**
-	 * Register command handlers
-	 */
 	private registerCommands(): void {
 		this.disposables.push(
 			vscode.commands.registerCommand(
@@ -123,12 +78,9 @@ export class PRCommentController {
 					await this.handleCommentSubmit(reply);
 				},
 			),
-			vscode.commands.registerCommand(
-				"azdo-pr-comments.editComment",
-				async (comment: AzDOComment) => {
-					await this.handleEditComment(comment);
-				},
-			),
+			vscode.commands.registerCommand("azdo-pr-comments.editComment", (comment: AzDOComment) => {
+				this.handleEditComment(comment);
+			}),
 			vscode.commands.registerCommand(
 				"azdo-pr-comments.saveEditedComment",
 				async (comment: AzDOComment) => {
@@ -137,8 +89,8 @@ export class PRCommentController {
 			),
 			vscode.commands.registerCommand(
 				"azdo-pr-comments.cancelEditComment",
-				async (comment: AzDOComment) => {
-					await this.handleCancelEditComment(comment);
+				(comment: AzDOComment) => {
+					this.handleCancelEditComment(comment);
 				},
 			),
 			vscode.commands.registerCommand(
@@ -165,11 +117,11 @@ export class PRCommentController {
 					await this.handleApplySuggestion(comment);
 				},
 			),
-			vscode.commands.registerCommand("azdo-pr-comments.collapseAllThreads", async () => {
-				await this.handleCollapseAllThreads();
+			vscode.commands.registerCommand("azdo-pr-comments.collapseAllThreads", () => {
+				this.handleCollapseAllThreads();
 			}),
-			vscode.commands.registerCommand("azdo-pr-comments.expandAllThreads", async () => {
-				await this.handleExpandAllThreads();
+			vscode.commands.registerCommand("azdo-pr-comments.expandAllThreads", () => {
+				this.handleExpandAllThreads();
 			}),
 			vscode.commands.registerCommand("azdo-pr-comments.addFileComment", async () => {
 				await this.handleAddFileComment();
@@ -177,27 +129,20 @@ export class PRCommentController {
 		);
 	}
 
-	/**
-	 * Load and display comments for a document (with debouncing)
-	 * This is the main entry point called by event listeners
-	 */
 	public async loadCommentsForDocument(document: vscode.TextDocument): Promise<void> {
 		const uriString = document.uri.toString();
 
-		// Only process PR diff documents
 		if (document.uri.scheme !== "azdo-pr") {
 			return;
 		}
 
 		logger.debug(`PRCommentController: Load request for: ${document.uri.path}`);
 
-		// Clear any existing debounce timer
 		if (this.debounceTimers.has(uriString)) {
 			clearTimeout(this.debounceTimers.get(uriString));
 			this.debounceTimers.delete(uriString);
 		}
 
-		// Set up debounced load
 		this.debounceTimers.set(
 			uriString,
 			setTimeout(async () => {
@@ -207,20 +152,15 @@ export class PRCommentController {
 		);
 	}
 
-	/**
-	 * Actually load comments (after debouncing)
-	 */
 	private async loadCommentsNow(document: vscode.TextDocument): Promise<void> {
 		const uriString = document.uri.toString();
 
-		// Check if already loading this document
 		const existingPromise = this.loadingPromises.get(uriString);
 		if (existingPromise) {
 			logger.debug(`PRCommentController: Already loading: ${document.uri.path}`);
 			return await existingPromise;
 		}
 
-		// Create loading promise
 		const loadPromise = this.performLoad(document);
 		this.loadingPromises.set(uriString, loadPromise);
 
@@ -231,9 +171,6 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Perform the actual comment loading and syncing
-	 */
 	private async performLoad(document: vscode.TextDocument): Promise<void> {
 		const contextManager = PRContextManager.getInstance();
 		const fileContext = contextManager.getPRFileContext(document.uri);
@@ -248,7 +185,6 @@ export class PRCommentController {
 		);
 
 		try {
-			// Fetch PR threads from server
 			const threads = await this.azureDevOpsClient.getPullRequestThreads(
 				fileContext.pullRequest.repository.project.id,
 				fileContext.pullRequest.repository.id,
@@ -257,14 +193,12 @@ export class PRCommentController {
 
 			logger.debug(`PRCommentController: Fetched ${threads.length} total threads`);
 
-			// Filter threads for this file
 			const fileThreads = this.filterThreadsForFile(threads, fileContext.filePath);
 
 			logger.debug(
 				`PRCommentController: Found ${fileThreads.length} threads for ${fileContext.filePath}`,
 			);
 
-			// Get organization URL for markdown processing
 			let organizationUrl: string | undefined;
 			try {
 				organizationUrl = this.azureDevOpsClient.getOrganizationUrl();
@@ -272,7 +206,6 @@ export class PRCommentController {
 				logger.warn("Organization URL not available", error);
 			}
 
-			// Sync threads (differential update - no flicker!)
 			const prContext = {
 				projectId: fileContext.pullRequest.repository.project.id,
 				repositoryId: fileContext.pullRequest.repository.id,
@@ -295,9 +228,6 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Filter threads for a specific file
-	 */
 	private filterThreadsForFile(threads: PRThread[], filePath: string): PRThread[] {
 		const normalizedPath = this.normalizePath(filePath);
 
@@ -311,29 +241,11 @@ export class PRCommentController {
 		});
 	}
 
-	/**
-	 * Normalize file paths for consistent comparison across platforms
-	 *
-	 * Azure DevOps API returns paths in various formats depending on context:
-	 * - Thread context: `/src/file.ts` (leading slash)
-	 * - File changes: `src/file.ts` (no leading slash)
-	 * - Windows paths: `src\file.ts` (backslashes)
-	 *
-	 * This method normalizes all paths to a canonical format for reliable matching:
-	 * 1. Remove leading slashes
-	 * 2. Convert backslashes to forward slashes (Windows → Unix style)
-	 * 3. Convert to lowercase (case-insensitive comparison)
-	 *
-	 * @param path - The file path to normalize
-	 * @returns Normalized path in format: `src/file.ts` (lowercase, forward slashes, no leading slash)
-	 */
+	/** Strip leading slashes, normalize separators, and lowercase for cross-platform comparison. */
 	private normalizePath(path: string): string {
 		return path.replace(/^\/+/, "").replaceAll("\\", "/").toLowerCase();
 	}
 
-	/**
-	 * Handle comment submission (with optimistic update)
-	 */
 	private async handleCommentSubmit(reply: vscode.CommentReply): Promise<void> {
 		try {
 			const commentText = reply.text.trim();
@@ -342,7 +254,6 @@ export class PRCommentController {
 				return;
 			}
 
-			// Get PR context
 			const contextManager = PRContextManager.getInstance();
 			const fileContext = contextManager.getPRFileContext(reply.thread.uri);
 
@@ -355,7 +266,6 @@ export class PRCommentController {
 			const azdoThread = reply.thread as AzDOCommentThread;
 			const isNewThread = !azdoThread.threadId;
 
-			// Get current user info
 			let currentUser: AuthorInfo;
 			try {
 				const user = await this.azureDevOpsClient.getCurrentUser();
@@ -371,7 +281,6 @@ export class PRCommentController {
 				return;
 			}
 
-			// Optimistic update: Show temporary comment immediately
 			let organizationUrl: string | undefined;
 			try {
 				organizationUrl = this.azureDevOpsClient.getOrganizationUrl();
@@ -388,10 +297,8 @@ export class PRCommentController {
 
 			this.threadManager.addTemporaryComment(azdoThread, tempComment);
 
-			// Submit to server
 			try {
 				if (isNewThread) {
-					// Create new thread
 					if (!reply.thread.range) {
 						throw new Error("Cannot create new thread without a range");
 					}
@@ -407,7 +314,6 @@ export class PRCommentController {
 						fileContext.side,
 					);
 
-					// Update thread ID
 					azdoThread.threadId = createdThread.id;
 					azdoThread.prContext = {
 						projectId: pr.repository.project.id,
@@ -415,7 +321,6 @@ export class PRCommentController {
 						pullRequestId: pr.pullRequestId,
 					};
 
-					// Replace temporary comment with real one
 					const serverComment = createdThread.comments[0];
 					const realComment = tempComment.toRealComment(
 						serverComment,
@@ -427,7 +332,6 @@ export class PRCommentController {
 
 					vscode.window.showInformationMessage("Comment added successfully");
 				} else {
-					// Reply to existing thread
 					const newComment = await this.azureDevOpsClient.replyToPRThread(
 						pr.repository.project.id,
 						pr.repository.id,
@@ -436,7 +340,6 @@ export class PRCommentController {
 						commentText,
 					);
 
-					// Replace temporary comment with real one
 					const realComment = tempComment.toRealComment(
 						newComment,
 						azdoThread.threadId,
@@ -448,7 +351,6 @@ export class PRCommentController {
 					vscode.window.showInformationMessage("Reply added successfully");
 				}
 			} catch (error) {
-				// Remove temporary comment on error
 				this.threadManager.removeTemporaryComment(azdoThread, tempComment.tempId);
 
 				vscode.window.showErrorMessage(formatErrorWithPrefix("Failed to add comment", error));
@@ -460,13 +362,9 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle comment edit (enter edit mode)
-	 */
-	private async handleEditComment(comment: AzDOComment): Promise<void> {
+	private handleEditComment(comment: AzDOComment): void {
 		try {
 			comment.startEdit();
-			// Force thread to update (trigger UI refresh)
 			const thread = comment.getThread() as AzDOCommentThread;
 			thread.comments = [...thread.comments];
 		} catch (error) {
@@ -475,9 +373,6 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle save edited comment
-	 */
 	private async handleSaveEditedComment(comment: AzDOComment): Promise<void> {
 		try {
 			const newContent = comment.getEditedContent().trim();
@@ -486,21 +381,17 @@ export class PRCommentController {
 				return;
 			}
 
-			// Find the thread containing this comment
 			const thread = comment.getThread() as AzDOCommentThread;
 			if (!thread || !thread.threadId || !thread.prContext) {
 				throw new Error("Could not find comment thread");
 			}
 
-			// Check if content actually changed
 			if (newContent === comment.getEditableContent()) {
-				// No changes, just exit edit mode
 				comment.cancelEdit();
 				thread.comments = [...thread.comments];
 				return;
 			}
 
-			// Update comment on server
 			await vscode.window.withProgress(
 				{
 					location: vscode.ProgressLocation.Notification,
@@ -519,11 +410,8 @@ export class PRCommentController {
 				},
 			);
 
-			// Update comment in place (no reload!)
 			comment.applyEdit(newContent);
 			comment.mode = vscode.CommentMode.Preview;
-
-			// Force thread to update
 			thread.comments = [...thread.comments];
 
 			vscode.window.showInformationMessage("Comment updated successfully");
@@ -533,13 +421,9 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle cancel edit comment
-	 */
-	private async handleCancelEditComment(comment: AzDOComment): Promise<void> {
+	private handleCancelEditComment(comment: AzDOComment): void {
 		try {
 			comment.cancelEdit();
-			// Force thread to update (trigger UI refresh)
 			const thread = comment.getThread() as AzDOCommentThread;
 			thread.comments = [...thread.comments];
 		} catch (error) {
@@ -548,12 +432,8 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle comment delete
-	 */
 	private async handleDeleteComment(comment: AzDOComment): Promise<void> {
 		try {
-			// Confirm deletion
 			const confirmed = await vscode.window.showWarningMessage(
 				"Are you sure you want to delete this comment?",
 				{ modal: true },
@@ -564,13 +444,11 @@ export class PRCommentController {
 				return;
 			}
 
-			// Find the thread
 			const thread = comment.getThread() as AzDOCommentThread;
 			if (!thread || !thread.threadId || !thread.prContext) {
 				throw new Error("Could not find comment thread");
 			}
 
-			// Delete comment on server
 			await vscode.window.withProgress(
 				{
 					location: vscode.ProgressLocation.Notification,
@@ -588,7 +466,6 @@ export class PRCommentController {
 				},
 			);
 
-			// Reload comments to reflect deletion
 			const document = vscode.workspace.textDocuments.find(
 				(doc) => doc.uri.toString() === thread.uri.toString(),
 			);
@@ -604,9 +481,6 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle thread resolve
-	 */
 	private async handleResolveThread(thread: vscode.CommentThread): Promise<void> {
 		const azdoThread = thread as AzDOCommentThread;
 		if (!azdoThread.threadId || !azdoThread.prContext) {
@@ -632,7 +506,6 @@ export class PRCommentController {
 				},
 			);
 
-			// Update thread state locally
 			this.threadManager.updateThreadStatus(azdoThread, THREAD_STATUS.RESOLVED);
 
 			vscode.window.showInformationMessage("Thread resolved successfully");
@@ -642,9 +515,6 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle thread unresolve
-	 */
 	private async handleUnresolveThread(thread: vscode.CommentThread): Promise<void> {
 		const azdoThread = thread as AzDOCommentThread;
 		if (!azdoThread.threadId || !azdoThread.prContext) {
@@ -670,7 +540,6 @@ export class PRCommentController {
 				},
 			);
 
-			// Update thread state locally
 			this.threadManager.updateThreadStatus(azdoThread, THREAD_STATUS.ACTIVE);
 
 			vscode.window.showInformationMessage("Thread unresolved successfully");
@@ -680,9 +549,6 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle apply suggestion - apply the suggested code to the local file
-	 */
 	private async handleApplySuggestion(comment: AzDOComment): Promise<void> {
 		try {
 			const suggestion = comment.extractSuggestion();
@@ -697,7 +563,6 @@ export class PRCommentController {
 				return;
 			}
 
-			// Get the PR file context to find the actual file
 			const contextManager = PRContextManager.getInstance();
 			const fileContext = contextManager.getPRFileContext(thread.uri);
 
@@ -706,7 +571,6 @@ export class PRCommentController {
 				return;
 			}
 
-			// Find the local workspace file
 			const workspaceFolders = vscode.workspace.workspaceFolders;
 			if (!workspaceFolders || workspaceFolders.length === 0) {
 				vscode.window.showErrorMessage(
@@ -715,7 +579,6 @@ export class PRCommentController {
 				return;
 			}
 
-			// Try to find the file in the workspace
 			const localFilePath = vscode.Uri.joinPath(workspaceFolders[0].uri, fileContext.filePath);
 
 			try {
@@ -727,9 +590,8 @@ export class PRCommentController {
 				return;
 			}
 
-			// Open the document and apply the edit
 			const document = await vscode.workspace.openTextDocument(localFilePath);
-			const lineIndex = suggestion.originalLine - 1; // Convert to 0-based
+			const lineIndex = suggestion.originalLine - 1;
 
 			if (lineIndex < 0 || lineIndex >= document.lineCount) {
 				vscode.window.showErrorMessage(
@@ -738,16 +600,13 @@ export class PRCommentController {
 				return;
 			}
 
-			// Create a workspace edit to replace the line
 			const edit = new vscode.WorkspaceEdit();
 			const lineRange = document.lineAt(lineIndex).range;
 			edit.replace(localFilePath, lineRange, suggestion.content);
 
-			// Apply the edit
 			const success = await vscode.workspace.applyEdit(edit);
 
 			if (success) {
-				// Show the document so user can see the change
 				await vscode.window.showTextDocument(document, { preview: false });
 				vscode.window.showInformationMessage("Suggestion applied successfully");
 				logger.info(
@@ -762,20 +621,13 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Clear comments for a specific document
-	 */
 	public clearCommentsForDocument(uri: vscode.Uri): void {
 		this.threadManager.clearThreadsForDocument(uri);
 	}
 
-	/**
-	 * Refresh all comments
-	 */
 	public async refresh(): Promise<void> {
 		logger.debug("PRCommentController: Refreshing all comments");
 
-		// Reload comments for all visible PR diff editors
 		for (const editor of vscode.window.visibleTextEditors) {
 			if (editor.document.uri.scheme === "azdo-pr") {
 				await this.loadCommentsForDocument(editor.document);
@@ -783,10 +635,7 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle collapse all comment threads
-	 */
-	private async handleCollapseAllThreads(): Promise<void> {
+	private handleCollapseAllThreads(): void {
 		const editor = vscode.window.activeTextEditor;
 		if (editor && editor.document.uri.scheme === "azdo-pr") {
 			this.threadManager.collapseAllThreads(editor.document.uri);
@@ -796,10 +645,7 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle expand all comment threads
-	 */
-	private async handleExpandAllThreads(): Promise<void> {
+	private handleExpandAllThreads(): void {
 		const editor = vscode.window.activeTextEditor;
 		if (editor && editor.document.uri.scheme === "azdo-pr") {
 			this.threadManager.expandAllThreads(editor.document.uri);
@@ -809,9 +655,6 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Handle adding a file-level comment
-	 */
 	private async handleAddFileComment(): Promise<void> {
 		try {
 			const editor = vscode.window.activeTextEditor;
@@ -820,7 +663,6 @@ export class PRCommentController {
 				return;
 			}
 
-			// Get PR context
 			const contextManager = PRContextManager.getInstance();
 			const fileContext = contextManager.getPRFileContext(editor.document.uri);
 
@@ -829,7 +671,6 @@ export class PRCommentController {
 				return;
 			}
 
-			// Prompt for comment text
 			const commentText = await vscode.window.showInputBox({
 				prompt: "Enter your file-level comment",
 				placeHolder: "Type your comment...",
@@ -843,12 +684,11 @@ export class PRCommentController {
 			});
 
 			if (!commentText) {
-				return; // User cancelled
+				return;
 			}
 
 			const pr = fileContext.pullRequest;
 
-			// Create file-level thread
 			await vscode.window.withProgress(
 				{
 					location: vscode.ProgressLocation.Notification,
@@ -866,7 +706,6 @@ export class PRCommentController {
 				},
 			);
 
-			// Reload comments to show the new thread
 			await this.loadCommentsForDocument(editor.document);
 
 			vscode.window.showInformationMessage("File comment added successfully");
@@ -876,28 +715,18 @@ export class PRCommentController {
 		}
 	}
 
-	/**
-	 * Dispose of resources
-	 */
 	public dispose(): void {
 		logger.debug("PRCommentController: Disposing");
 
-		// Clear all debounce timers
 		for (const timer of this.debounceTimers.values()) {
 			clearTimeout(timer);
 		}
 		this.debounceTimers.clear();
 
-		// Clear loading promises
 		this.loadingPromises.clear();
-
-		// Dispose thread manager
 		this.threadManager.clearAll();
-
-		// Dispose comment controller
 		this.commentController.dispose();
 
-		// Dispose other resources
 		for (const d of this.disposables) {
 			d.dispose();
 		}

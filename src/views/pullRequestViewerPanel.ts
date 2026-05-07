@@ -121,13 +121,11 @@ export class PullRequestViewerPanel {
 		pullRequest: PullRequest,
 		reviewedFilesService: ReviewedFilesService,
 	) {
-		// Store the reviewed files service
 		PullRequestViewerPanel._reviewedFilesService = reviewedFilesService;
 		const column = vscode.window.activeTextEditor
 			? vscode.window.activeTextEditor.viewColumn
 			: undefined;
 
-		// Get current user ID for permission checks on comments
 		let currentUserId: string | undefined;
 		try {
 			const currentUser = await azureDevOpsClient.getCurrentUser();
@@ -254,10 +252,7 @@ export class PullRequestViewerPanel {
 			const repositoryId = this.pullRequest.repository.id;
 			const pullRequestId = this.pullRequest.pullRequestId;
 
-			// Get cache service
 			const cache = PRCacheService.getInstance();
-
-			// Try to get cached data first
 			const cachedData = cache.get(projectId, repositoryId, pullRequestId);
 
 			let fullPRDetails: PullRequest;
@@ -267,7 +262,6 @@ export class PullRequestViewerPanel {
 			let cacheInfo: { isCached: boolean; ageInSeconds?: number };
 
 			if (cachedData) {
-				// Use cached data
 				logger.debug(`PRViewerPanel: Using cached data for PR #${pullRequestId}`);
 				fullPRDetails = cachedData.fullDetails;
 				// iterations not needed here - only used when fetching fresh file changes
@@ -276,24 +270,21 @@ export class PullRequestViewerPanel {
 				const ageMs = Date.now() - cachedData.timestamp;
 				cacheInfo = { isCached: true, ageInSeconds: Math.floor(ageMs / 1000) };
 			} else {
-				// Fetch fresh data from API
 				logger.debug(`PRViewerPanel: Fetching fresh data for PR #${pullRequestId}`);
 
-				// Fetch full PR details to get complete description (list API truncates it)
+				// Full details needed because the list API truncates description
 				fullPRDetails = await this.azureDevOpsClient.getPullRequestDetails(
 					projectId,
 					repositoryId,
 					pullRequestId,
 				);
 
-				// Fetch iterations
 				iterations = await this.azureDevOpsClient.getPullRequestIterations(
 					projectId,
 					repositoryId,
 					pullRequestId,
 				);
 
-				// Get file changes from the latest iteration
 				fileChanges = [];
 				if (iterations.length > 0) {
 					const latestIteration = iterations.at(-1);
@@ -307,14 +298,12 @@ export class PullRequestViewerPanel {
 					}
 				}
 
-				// Fetch PR threads (comments)
 				threads = await this.azureDevOpsClient.getPullRequestThreads(
 					projectId,
 					repositoryId,
 					pullRequestId,
 				);
 
-				// Store in cache
 				cache.set(
 					projectId,
 					repositoryId,
@@ -327,17 +316,13 @@ export class PullRequestViewerPanel {
 				cacheInfo = { isCached: false };
 			}
 
-			// Update the entire PR object with fresh/cached details to ensure all fields are current
-			// This includes title, description, status, isDraft, reviewers, and all other fields
 			this.pullRequest = fullPRDetails;
 
-			// Convert markdown description to HTML
 			const { marked } = await PullRequestViewerPanel.getMarked();
 			const descriptionHtml = this.pullRequest.description
 				? await marked(this.pullRequest.description)
 				: "No description provided.";
 
-			// Pre-fetch all user avatars
 			const avatarMap = await this._prefetchAvatars(this.pullRequest, threads);
 
 			webview.html = this._getHtmlForWebview(
@@ -478,15 +463,12 @@ export class PullRequestViewerPanel {
 		const pr = this.pullRequest;
 		const nonce = getNonce();
 
-		// Format dates
 		const createdDate = pr.creationDate.toLocaleDateString();
 		const createdTime = pr.creationDate.toLocaleTimeString();
 
-		// Format branch names
 		const sourceBranch = pr.sourceRefName ? pr.sourceRefName.replace("refs/heads/", "") : "unknown";
 		const targetBranch = pr.targetRefName ? pr.targetRefName.replace("refs/heads/", "") : "unknown";
 
-		// Build HTML using array join to avoid template literal issues with description content
 		const parts = [
 			"<!DOCTYPE html>",
 			'<html lang="en">',
@@ -522,9 +504,6 @@ export class PullRequestViewerPanel {
 		return parts.join("");
 	}
 
-	/**
-	 * Handle review submission from the webview
-	 */
 	private async _handleReviewSubmission(vote: number) {
 		try {
 			await vscode.window.withProgress(
@@ -554,23 +533,17 @@ export class PullRequestViewerPanel {
 				},
 			);
 
-			// Show success message based on vote type
-			let voteMessage = "Your vote has been submitted";
-			if (vote === 10) {
-				voteMessage = "You approved this pull request";
-			} else if (vote === 5) {
-				voteMessage = "You approved this pull request with suggestions";
-			} else if (vote === -5) {
-				voteMessage = "Marked as waiting for author";
-			} else if (vote === -10) {
-				voteMessage = "You rejected this pull request";
-			} else if (vote === 0) {
-				voteMessage = "Your vote has been reset";
-			}
+			const voteMessages: Record<number, string> = {
+				10: "You approved this pull request",
+				5: "You approved this pull request with suggestions",
+				[-5]: "Marked as waiting for author",
+				[-10]: "You rejected this pull request",
+				0: "Your vote has been reset",
+			};
+			const voteMessage = voteMessages[vote] ?? "Your vote has been submitted";
 
 			vscode.window.showInformationMessage(voteMessage);
 
-			// Invalidate cache for this PR since the review state has changed
 			const cache = PRCacheService.getInstance();
 			cache.invalidate(
 				this.pullRequest.repository.project.id,
@@ -578,7 +551,6 @@ export class PullRequestViewerPanel {
 				this.pullRequest.pullRequestId,
 			);
 
-			// Refresh the panel to show updated reviewer status
 			await this._update();
 		} catch (error) {
 			const friendlyMessage = this._getFriendlyErrorMessage(error);
@@ -587,9 +559,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Handle toggling the reviewed state of a file
-	 */
 	private async _handleToggleReviewed(filePath: string) {
 		if (!PullRequestViewerPanel._reviewedFilesService) {
 			logger.warn("ReviewedFilesService not available");
@@ -601,13 +570,11 @@ export class PullRequestViewerPanel {
 			const repositoryId = this.pullRequest.repository.id;
 			const prId = this.pullRequest.pullRequestId;
 
-			// Normalize path to match the format used in file list rendering
 			let normalizedPath = filePath;
 			if (!normalizedPath.startsWith("/")) {
 				normalizedPath = `/${normalizedPath}`;
 			}
 
-			// Toggle the reviewed state
 			const newState = await PullRequestViewerPanel._reviewedFilesService.toggleFileReviewed(
 				projectId,
 				repositoryId,
@@ -615,7 +582,6 @@ export class PullRequestViewerPanel {
 				normalizedPath,
 			);
 
-			// Send updated state back to webview for dynamic UI update
 			this._panel.webview.postMessage({
 				command: "fileReviewedStateChanged",
 				filePath: filePath,
@@ -628,9 +594,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Handle reply to a thread from webview
-	 */
 	private async _handleReplyToThread(threadId: number, content: string): Promise<void> {
 		try {
 			if (!content.trim()) {
@@ -655,9 +618,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Handle edit comment from webview
-	 */
 	private async _handleEditComment(
 		threadId: number,
 		commentId: number,
@@ -686,9 +646,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Handle delete comment from webview
-	 */
 	private async _handleDeleteComment(threadId: number, commentId: number): Promise<void> {
 		try {
 			await this.azureDevOpsClient.deleteComment(
@@ -707,9 +664,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Handle resolve thread from webview
-	 */
 	private async _handleResolveThread(threadId: number): Promise<void> {
 		try {
 			await this.azureDevOpsClient.updateThreadStatus(
@@ -728,9 +682,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Handle unresolve thread from webview
-	 */
 	private async _handleUnresolveThread(threadId: number): Promise<void> {
 		try {
 			await this.azureDevOpsClient.updateThreadStatus(
@@ -749,9 +700,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Send message to webview
-	 */
 	private _sendMessageToWebview(message: { type: string; message: string }): void {
 		this._panel.webview.postMessage(message);
 	}
@@ -827,7 +775,6 @@ export class PullRequestViewerPanel {
 				usingCommitSHAs: !!this.pullRequest.lastMergeSourceCommit?.commitId,
 			});
 
-			// Fetch both versions of the file
 			await vscode.window.withProgress(
 				{
 					location: vscode.ProgressLocation.Notification,
@@ -841,7 +788,6 @@ export class PullRequestViewerPanel {
 					let modifiedContent = "";
 
 					try {
-						// Fetch base version (from target) unless file is added
 						if (!isAdded) {
 							progress.report({
 								increment: 25,
@@ -870,7 +816,6 @@ export class PullRequestViewerPanel {
 							}
 						}
 
-						// Fetch modified version (from source) unless file is deleted
 						if (!isDeleted) {
 							progress.report({
 								increment: 50,
@@ -902,7 +847,6 @@ export class PullRequestViewerPanel {
 							`azdo-pr:modified/${prId}${path}?pr=${prId}&repo=${repoName}&branch=${sourceBranch}`,
 						);
 
-						// Register content provider if not already registered
 						if (!PullRequestViewerPanel._contentProviderRegistered) {
 							PullRequestViewerPanel._contentProviderRegistered = true;
 							vscode.workspace.registerTextDocumentContentProvider("azdo-pr", {
@@ -913,7 +857,6 @@ export class PullRequestViewerPanel {
 							});
 						}
 
-						// Cache the content for both versions with timestamps
 						const now = Date.now();
 						PullRequestViewerPanel._virtualFileCache.set(baseUri.toString(), {
 							content: baseContent,
@@ -926,7 +869,6 @@ export class PullRequestViewerPanel {
 							prId,
 						});
 
-						// Create title for diff view
 						const fileName = path.split("/").pop() || path;
 						let title = `${fileName} (PR #${prId})`;
 						if (isAdded) {
@@ -942,7 +884,6 @@ export class PullRequestViewerPanel {
 						// IMPORTANT: Set context BEFORE opening diff to avoid race condition
 						const contextManager = PRContextManager.getInstance();
 
-						// Base (left) side context
 						const baseContext: PRFileContext = {
 							pullRequest: this.pullRequest,
 							filePath: path,
@@ -952,7 +893,6 @@ export class PullRequestViewerPanel {
 						contextManager.setPRFileContext(baseUri, baseContext);
 						logger.debug(`PRViewerPanel: Set base context for: ${baseUri.toString()}`);
 
-						// Modified (right) side context
 						const modifiedContext: PRFileContext = {
 							pullRequest: this.pullRequest,
 							filePath: path,
@@ -965,12 +905,9 @@ export class PullRequestViewerPanel {
 						// Legacy support
 						contextManager.setFileContext(modifiedUri.toString(), this.pullRequest);
 
-						// Open diff view
 						await vscode.commands.executeCommand("vscode.diff", baseUri, modifiedUri, title);
 
-						// Mark file as reviewed
 						if (PullRequestViewerPanel._reviewedFilesService) {
-							// Normalize path to match the format used in file list rendering
 							let normalizedPath = path;
 							if (!normalizedPath.startsWith("/")) {
 								normalizedPath = `/${normalizedPath}`;
@@ -983,7 +920,6 @@ export class PullRequestViewerPanel {
 							);
 							logger.debug(`Marked file as reviewed: ${normalizedPath}`);
 
-							// Send message to webview to update UI dynamically
 							this._panel.webview.postMessage({
 								command: "fileReviewedStateChanged",
 								filePath: path,
@@ -1032,9 +968,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Check if a file path is potentially an LFS file based on extension
-	 */
 	private _isPotentiallyLfsFile(path: string): boolean {
 		const lfsExtensions = [
 			".pdf",
@@ -1163,9 +1096,6 @@ export class PullRequestViewerPanel {
 		}
 	}
 
-	/**
-	 * Get or create LFS service singleton
-	 */
 	private _getLfsService(): LfsService {
 		if (!PullRequestViewerPanel._lfsService) {
 			PullRequestViewerPanel._lfsService = new LfsService(
@@ -1176,16 +1106,10 @@ export class PullRequestViewerPanel {
 		return PullRequestViewerPanel._lfsService;
 	}
 
-	/**
-	 * Get or create file handler registry singleton
-	 */
 	private _getFileHandlerRegistry(): FileHandlerRegistry {
 		if (!PullRequestViewerPanel._fileHandlerRegistry) {
 			const registry = new FileHandlerRegistry();
-			// Register handlers in order of specificity
 			registry.register(new PdfFileHandler());
-			// Future: registry.register(new ImageFileHandler());
-			// Future: registry.register(new FallbackBinaryHandler());
 			PullRequestViewerPanel._fileHandlerRegistry = registry;
 		}
 		return PullRequestViewerPanel._fileHandlerRegistry;
@@ -1950,9 +1874,6 @@ export class PullRequestViewerPanel {
                 flex: 1;
                 min-width: 0;
             }
-            .comment-header-right {
-                flex-shrink: 0;
-            }
             .comment-author {
                 font-weight: 600;
                 font-size: 13px;
@@ -2196,13 +2117,11 @@ export class PullRequestViewerPanel {
                 display: flex;
                 align-items: center;
                 gap: 8px;
+                flex-shrink: 0;
             }
         </style>`;
 	}
 
-	/**
-	 * Get the tab navigation HTML
-	 */
 	private _getTabNavigationHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
 		const fileCount = fileChanges.filter((c) => !c.item.isFolder).length;
 		const generalCommentCount = threads.filter(
@@ -2224,9 +2143,6 @@ export class PullRequestViewerPanel {
         </div>`;
 	}
 
-	/**
-	 * Get the conversation tab content
-	 */
 	private _getConversationTabHtml(
 		pr: PullRequest,
 		descriptionHtml: string,
@@ -2247,9 +2163,6 @@ export class PullRequestViewerPanel {
         </div>`;
 	}
 
-	/**
-	 * Get the files tab content
-	 */
 	private _getFilesTabHtml(fileChanges: PRFileChange[], threads: PRThread[]): string {
 		return `
         <div class="tab-panel" data-panel="files">
@@ -2293,15 +2206,15 @@ export class PullRequestViewerPanel {
         <div class="header">
             <div class="header-top">
                 <h1 class="pr-title">
-                    ${this._escapeHtml(pr.title || "Untitled PR")}
+                    ${escapeHtml(pr.title || "Untitled PR")}
                     <span class="status-badge ${statusClass}">${statusText}</span>
                 </h1>
                 <div class="header-buttons">
-                    <button class="refresh-btn" title="${this._escapeHtml(refreshTooltip)}">
+                    <button class="refresh-btn" title="${escapeHtml(refreshTooltip)}">
                         <span class="btn-icon">↻</span>
                         Refresh
                     </button>
-                    <button class="open-browser-btn" data-url="${this._escapeHtml(prUrl)}" title="Open PR in Azure DevOps">
+                    <button class="open-browser-btn" data-url="${escapeHtml(prUrl)}" title="Open PR in Azure DevOps">
                         Open in Browser
                     </button>
                 </div>
@@ -2311,17 +2224,17 @@ export class PullRequestViewerPanel {
             </div>
             <div class="pr-meta-secondary">
                 <span class="meta-item">
-                    <span class="meta-label">Repository:</span> ${this._escapeHtml(pr.repository?.name) || "[Repository name unavailable]"}
+                    <span class="meta-label">Repository:</span> ${escapeHtml(pr.repository?.name) || "[Repository name unavailable]"}
                 </span>
                 <span class="meta-separator">•</span>
                 <span class="meta-item">
-                    <span class="meta-label">Project:</span> ${this._escapeHtml(pr.repository?.project?.name) || "[Project name unavailable]"}
+                    <span class="meta-label">Project:</span> ${escapeHtml(pr.repository?.project?.name) || "[Project name unavailable]"}
                 </span>
             </div>
             <div class="branch-info">
-                <span class="branch">${this._escapeHtml(sourceBranch)}</span>
+                <span class="branch">${escapeHtml(sourceBranch)}</span>
                 <span>→</span>
-                <span class="branch">${this._escapeHtml(targetBranch)}</span>
+                <span class="branch">${escapeHtml(targetBranch)}</span>
             </div>
         </div>`;
 	}
@@ -2330,7 +2243,6 @@ export class PullRequestViewerPanel {
 		pr: PullRequest,
 		avatarMap: Map<string, string> = new Map(),
 	): string {
-		// Calculate vote counts
 		const approvedCount = pr.reviewers?.filter((r) => r.vote === 10).length || 0;
 		const approvedWithSuggestionsCount = pr.reviewers?.filter((r) => r.vote === 5).length || 0;
 		const rejectedCount = pr.reviewers?.filter((r) => r.vote === -10).length || 0;
@@ -2384,7 +2296,7 @@ export class PullRequestViewerPanel {
 					<div class="reviewer-item">
 						<div class="reviewer-info">
 							${this._getAvatarHtml(avatarMap.get(reviewer.imageUrl || ""), reviewer.displayName || reviewer.uniqueName || "Unknown", "sm")}
-							<span class="reviewer-name">${this._escapeHtml(reviewer.displayName || reviewer.uniqueName || "[Reviewer name unavailable]")}</span>
+							<span class="reviewer-name">${escapeHtml(reviewer.displayName || reviewer.uniqueName || "[Reviewer name unavailable]")}</span>
 							${requiredBadge}
 						</div>
 						<div class="reviewer-vote">
@@ -2578,7 +2490,6 @@ export class PullRequestViewerPanel {
 		threads: PRThread[],
 		avatarMap: Map<string, string> = new Map(),
 	): string {
-		// Build identity resolver from all comment authors in all threads
 		const identityResolver = new Map<string, string>();
 		for (const thread of threads) {
 			for (const comment of thread.comments || []) {
@@ -2633,7 +2544,6 @@ export class PullRequestViewerPanel {
 				const content = cleanCommentContent(rawContent, identityResolver);
 				const replyCount = thread.comments.length - 1;
 
-				// Check if current user can edit this comment
 				const canEditFirstComment =
 					this.currentUserId && firstComment.author?.id === this.currentUserId;
 
@@ -2647,7 +2557,7 @@ export class PullRequestViewerPanel {
 					return `
 						<div class="notification-item">
 							<span class="notification-icon">📋</span>
-							<span class="notification-text">${this._escapeHtml(notificationText)}</span>
+							<span class="notification-text">${escapeHtml(notificationText)}</span>
 							<span class="notification-time">${timeAgo}</span>
 						</div>`;
 				}
@@ -2676,7 +2586,7 @@ export class PullRequestViewerPanel {
 						badgeClass = "status-badge-pending";
 					}
 
-					statusBadge = `<span class="comment-status-badge ${badgeClass}">${this._escapeHtml(statusLabel)}</span>`;
+					statusBadge = `<span class="comment-status-badge ${badgeClass}">${escapeHtml(statusLabel)}</span>`;
 				}
 
 				const timeAgo = formatTimeAgo(thread.lastUpdatedDate);
@@ -2727,7 +2637,7 @@ export class PullRequestViewerPanel {
                         <div class="comment-reply" data-comment-id="${comment.id}">
                             <div class="comment-reply-header">
                                 ${this._getAvatarHtml(avatarMap.get(comment.author?.imageUrl || ""), replyAuthor, "sm")}
-                                <span class="comment-author">${this._escapeHtml(replyAuthor)}</span>
+                                <span class="comment-author">${escapeHtml(replyAuthor)}</span>
                                 <span class="comment-time">${replyTime}</span>
                             </div>
                             <div class="comment-body" data-original-content="${escapeHtml(replyContent)}">${autoLinkUrls(sanitizeHtml(replyContent))}</div>
@@ -2758,7 +2668,7 @@ export class PullRequestViewerPanel {
                     <div class="comment-header">
                         <div class="comment-header-left">
                             ${this._getAvatarHtml(avatarMap.get(firstComment.author?.imageUrl || ""), authorName, "md")}
-                            <span class="comment-author">${this._escapeHtml(authorName)}</span>
+                            <span class="comment-author">${escapeHtml(authorName)}</span>
                             <span class="comment-time">${timeAgo}</span>
                         </div>
                         <div class="comment-header-right">
@@ -2792,7 +2702,6 @@ export class PullRequestViewerPanel {
             </div>`;
 		}
 
-		// Count comments per file
 		const commentCounts = this._countCommentsPerFile(threads);
 
 		const fileItems = fileChanges
@@ -2812,28 +2721,23 @@ export class PullRequestViewerPanel {
 					changeTypeText = "R";
 				}
 
-				// Extract filename and directory path
 				const fullPath = change.item?.path || "";
 				const pathParts = fullPath.split("/");
 				const fileName = pathParts.pop() || fullPath;
 				const dirPath = pathParts.join("/") || "/";
 
-				// Handle rename case
 				let displayFileName = fileName;
-				const displayDirPath = dirPath;
 
 				if (change.changeType?.includes("rename") && change.originalPath) {
 					const originalFileName = change.originalPath.split("/").pop() || change.originalPath;
-					displayFileName = `${this._escapeHtml(originalFileName)} → ${this._escapeHtml(fileName)}`;
+					displayFileName = `${escapeHtml(originalFileName)} → ${escapeHtml(fileName)}`;
 				}
 
-				// Normalize path for lookup - ensure it starts with /
 				let normalizedPath = change.item?.path || "";
 				if (!normalizedPath.startsWith("/")) {
 					normalizedPath = `/${normalizedPath}`;
 				}
 
-				// Get comment count for this file
 				const commentCount = commentCounts.get(normalizedPath) || 0;
 				const commentSuffix = commentCount === 1 ? "" : "s";
 				const commentBadge =
@@ -2841,7 +2745,6 @@ export class PullRequestViewerPanel {
 						? `<span class="comment-count-badge" title="${commentCount} comment${commentSuffix}">💬 ${commentCount}</span>`
 						: "";
 
-				// Check if file is reviewed
 				const isReviewed =
 					PullRequestViewerPanel._reviewedFilesService?.isFileReviewed(
 						this.pullRequest.repository.project.id,
@@ -2850,7 +2753,6 @@ export class PullRequestViewerPanel {
 						normalizedPath,
 					) || false;
 
-				// Always show reviewed badge (filled when reviewed, outline when not)
 				const reviewedClass = isReviewed
 					? "reviewed-badge reviewed"
 					: "reviewed-badge not-reviewed";
@@ -2860,11 +2762,11 @@ export class PullRequestViewerPanel {
 				const reviewedBadge = `<span class="${reviewedClass}" data-action="toggle-reviewed" title="${reviewedTitle}">✓</span>`;
 
 				return `
-                <li class="file-item" data-file-path="${this._escapeHtml(change.item?.path)}" data-change-type="${this._escapeHtml(change.changeType)}" data-original-path="${this._escapeHtml(change.originalPath || "")}" data-file-index="${index}">
+                <li class="file-item" data-file-path="${escapeHtml(change.item?.path)}" data-change-type="${escapeHtml(change.changeType)}" data-original-path="${escapeHtml(change.originalPath || "")}" data-file-index="${index}">
                     <span class="file-change-type ${changeTypeClass}">${changeTypeText}</span>
                     <div class="file-info">
-                        <span class="file-name">${this._escapeHtml(displayFileName)}</span>
-                        <span class="file-dir-path">${this._escapeHtml(displayDirPath)}</span>
+                        <span class="file-name">${escapeHtml(displayFileName)}</span>
+                        <span class="file-dir-path">${escapeHtml(dirPath)}</span>
                     </div>
                     ${commentBadge}
                     ${reviewedBadge}
@@ -3119,20 +3021,6 @@ export class PullRequestViewerPanel {
         </script>`;
 	}
 
-	private _escapeHtml(text: string | null | undefined): string {
-		if (text == null) {
-			return "";
-		}
-		const map: { [key: string]: string } = {
-			"&": "&amp;",
-			"<": "&lt;",
-			">": "&gt;",
-			'"': "&quot;",
-			"'": "&#039;",
-		};
-		return text.replaceAll(/[&<>"']/g, (m) => map[m]);
-	}
-
 	/**
 	 * Get initials from a display name for avatar fallback
 	 */
@@ -3156,14 +3044,14 @@ export class PullRequestViewerPanel {
 		displayName: string,
 		size: "sm" | "md" | "lg" = "sm",
 	): string {
-		const escapedName = this._escapeHtml(displayName);
+		const escapedName = escapeHtml(displayName);
 		const sizeClass = `avatar-${size}`;
 
 		if (imageDataUri) {
 			return `<img class="avatar ${sizeClass}" src="${imageDataUri}" alt="${escapedName}" title="${escapedName}" />`;
 		}
 
-		const initials = this._escapeHtml(this._getInitials(displayName));
+		const initials = escapeHtml(this._getInitials(displayName));
 		return `<span class="avatar avatar-fallback ${sizeClass}" title="${escapedName}">${initials}</span>`;
 	}
 
@@ -3183,8 +3071,8 @@ export class PullRequestViewerPanel {
 	): string {
 		const size = options?.size ?? "sm";
 		const showName = options?.showName ?? true;
-		const escapedName = this._escapeHtml(displayName);
-		const initials = this._escapeHtml(this._getInitials(displayName));
+		const escapedName = escapeHtml(displayName);
+		const initials = escapeHtml(this._getInitials(displayName));
 		const sizeClass = `avatar-${size}`;
 
 		let avatarHtml: string;

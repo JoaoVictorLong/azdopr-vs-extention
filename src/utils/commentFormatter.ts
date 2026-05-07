@@ -1,14 +1,6 @@
 import * as vscode from "vscode";
 import type { PRComment, PRThread } from "../services/azureDevOpsClient";
 
-/**
- * Unified comment formatting utilities
- * Ensures consistent comment display across inline diffs, tree view, and webview
- */
-
-/**
- * Format time ago (e.g., "2h ago", "3d ago")
- */
 export function formatTimeAgo(date: Date): string {
 	const now = new Date();
 	const diffMs = now.getTime() - date.getTime();
@@ -31,12 +23,8 @@ export function formatTimeAgo(date: Date): string {
 	return date.toLocaleDateString();
 }
 
-/**
- * Get human-readable thread status label
- */
 export function getThreadStatusLabel(status: string | number | undefined | null): string {
 	const statusMap: { [key: string]: string } = {
-		// Numeric values
 		"0": "Unknown",
 		"1": "Active",
 		"2": "Resolved",
@@ -44,7 +32,6 @@ export function getThreadStatusLabel(status: string | number | undefined | null)
 		"4": "Closed",
 		"5": "By Design",
 		"6": "Pending",
-		// Text values (case-insensitive)
 		unknown: "Unknown",
 		active: "Active",
 		fixed: "Resolved",
@@ -62,9 +49,6 @@ export function getThreadStatusLabel(status: string | number | undefined | null)
 	return statusMap[statusKey] || `Unknown (${status})`;
 }
 
-/**
- * Get status icon for a thread
- */
 export function getThreadStatusIcon(statusLabel: string): string {
 	switch (statusLabel.toLowerCase()) {
 		case "active":
@@ -82,16 +66,10 @@ export function getThreadStatusIcon(statusLabel: string): string {
 	}
 }
 
-/**
- * Clean comment content by resolving GUID mentions to display names
- * @param content The comment content to clean
- * @param identityResolver Optional map of GUIDs to display names
- */
 export function cleanCommentContent(
 	content: string,
 	identityResolver?: Map<string, string>,
 ): string {
-	// Replace GUID mentions like @<5B8B71B7-3EB7-6574-B377-A695965DBDA8>
 	const cleaned = content.replace(/@<([A-F0-9-]+)>/gi, (_match, guid) => {
 		if (identityResolver) {
 			const displayName = identityResolver.get(guid.toLowerCase());
@@ -104,10 +82,6 @@ export function cleanCommentContent(
 	return cleaned.trim();
 }
 
-/**
- * Format a comment header as markdown
- * Used for inline diff comments
- */
 export function formatCommentHeaderMarkdown(
 	comment: PRComment,
 	threadStatus?: string | number,
@@ -115,13 +89,10 @@ export function formatCommentHeaderMarkdown(
 ): string {
 	const parts: string[] = [];
 
-	// Author
 	parts.push(`**${comment.author.displayName}**`);
 
-	// Time
 	parts.push(formatTimeAgo(comment.publishedDate));
 
-	// Status (if requested and meaningful)
 	if (includeStatus && threadStatus !== undefined && threadStatus !== null) {
 		const statusLabel = getThreadStatusLabel(threadStatus);
 		if (
@@ -134,7 +105,6 @@ export function formatCommentHeaderMarkdown(
 		}
 	}
 
-	// Edited indicator
 	if (comment.lastUpdatedDate.getTime() !== comment.publishedDate.getTime()) {
 		parts.push("*(edited)*");
 	}
@@ -142,28 +112,20 @@ export function formatCommentHeaderMarkdown(
 	return parts.join(" • ");
 }
 
-/**
- * Format a complete comment as markdown for inline display
- * This creates a rich, consistent markdown display
- */
 export function formatCommentAsMarkdown(
 	comment: PRComment,
 	thread?: PRThread,
-	_organizationUrl?: string,
 ): vscode.MarkdownString {
 	const parts: string[] = [];
 
-	// Header with metadata
 	const threadStatus = thread?.status;
 	const header = formatCommentHeaderMarkdown(comment, threadStatus, true);
 	parts.push(header);
 	parts.push(""); // Blank line
 
-	// Content (cleaned)
 	const content = cleanCommentContent(comment.content || "[No content]");
 	parts.push(content);
 
-	// File and line context (if available)
 	if (thread?.threadContext?.filePath) {
 		parts.push(""); // Blank line
 		parts.push("---");
@@ -188,9 +150,6 @@ export function formatCommentAsMarkdown(
 	return markdown;
 }
 
-/**
- * Format reply comments as markdown
- */
 export function formatRepliesAsMarkdown(comments: PRComment[]): vscode.MarkdownString | undefined {
 	if (comments.length <= 1) {
 		return undefined; // No replies

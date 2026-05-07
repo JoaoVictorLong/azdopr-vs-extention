@@ -3,9 +3,6 @@ import type { PRComment } from "../services/azureDevOpsClient";
 import { cleanCommentContent } from "../utils/commentFormatter";
 import { processCommentContent } from "../utils/markdownProcessor";
 
-/**
- * Author information for comments
- */
 export interface AuthorInfo {
 	id: string;
 	displayName: string;
@@ -13,11 +10,6 @@ export interface AuthorInfo {
 	imageUrl?: string;
 }
 
-/**
- * Base abstract class for all comment types
- * Implements vscode.Comment interface with shared functionality
- * Inspired by GitHub PR extension's CommentBase class
- */
 export abstract class CommentBase implements vscode.Comment {
 	protected _body: string | vscode.MarkdownString;
 	protected _mode: vscode.CommentMode = vscode.CommentMode.Preview;
@@ -43,54 +35,31 @@ export abstract class CommentBase implements vscode.Comment {
 		this._body = this.formatBody(rawContent);
 	}
 
-	/**
-	 * Get the comment body
-	 * Subclasses can override to provide different formatting
-	 */
 	get body(): string | vscode.MarkdownString {
 		return this._body;
 	}
 
-	/**
-	 * Set the comment body
-	 * Typically used during editing
-	 */
 	set body(value: string | vscode.MarkdownString) {
 		this._body = value;
 	}
 
-	/**
-	 * Get the comment mode (Preview or Editing)
-	 */
 	get mode(): vscode.CommentMode {
 		return this._mode;
 	}
 
-	/**
-	 * Set the comment mode
-	 */
 	set mode(value: vscode.CommentMode) {
 		this._mode = value;
 	}
 
-	/**
-	 * Get the context value for conditional UI
-	 */
 	get contextValue(): string | undefined {
 		return this._contextValue;
 	}
 
-	/**
-	 * Format comment body as MarkdownString
-	 */
 	protected formatBody(content: string): vscode.MarkdownString {
 		const cleaned = cleanCommentContent(content, this.identityResolver);
 		return processCommentContent(cleaned, this.organizationUrl);
 	}
 
-	/**
-	 * Update context values based on permissions
-	 */
 	protected updateContext(canEdit: boolean, canDelete: boolean, hasSuggestion?: boolean): void {
 		const contextValues: string[] = [];
 
@@ -107,9 +76,6 @@ export abstract class CommentBase implements vscode.Comment {
 		this._contextValue = contextValues.length > 0 ? contextValues.join(",") : undefined;
 	}
 
-	/**
-	 * Set author icon from file path
-	 */
 	public setAuthorIcon(filePath: string): void {
 		this.author = {
 			...this.author,
@@ -118,11 +84,6 @@ export abstract class CommentBase implements vscode.Comment {
 	}
 }
 
-/**
- * Temporary comment shown during async operations
- * Displays "Pending" state until server confirms
- * Can be converted to AzDOComment when server responds
- */
 export class TemporaryComment extends CommentBase {
 	private static nextId = 0;
 	public readonly tempId: string;
@@ -143,21 +104,13 @@ export class TemporaryComment extends CommentBase {
 		this.label = "Pending";
 		this._mode = vscode.CommentMode.Preview;
 
-		// Temporary comments cannot be edited/deleted until confirmed
 		this._contextValue = "pending";
 	}
 
-	/**
-	 * Get the original body before any edits
-	 */
 	public getCancelEditBody(): string {
 		return this.originalBody;
 	}
 
-	/**
-	 * Convert this temporary comment to a real AzDOComment
-	 * Called when server confirms the comment creation
-	 */
 	public toRealComment(
 		serverComment: PRComment,
 		threadId: number,
@@ -172,7 +125,6 @@ export class TemporaryComment extends CommentBase {
 			this.identityResolver,
 		);
 
-		// Preserve any icon that was set
 		if (this.author.iconPath) {
 			realComment.author = {
 				...realComment.author,
@@ -183,9 +135,6 @@ export class TemporaryComment extends CommentBase {
 		return realComment;
 	}
 
-	/**
-	 * Override body getter to show pending indicator
-	 */
 	override get body(): string | vscode.MarkdownString {
 		const markdown = new vscode.MarkdownString();
 		markdown.isTrusted = true;
@@ -198,10 +147,6 @@ export class TemporaryComment extends CommentBase {
 	}
 }
 
-/**
- * Real comment from Azure DevOps server
- * Can be updated in place without recreation
- */
 export class AzDOComment extends CommentBase {
 	public readonly commentId: number;
 	public readonly threadId: number;
@@ -237,20 +182,11 @@ export class AzDOComment extends CommentBase {
 		this.lastUpdatedDate = serverComment.lastUpdatedDate;
 		this.timestamp = this.publishedDate;
 
-		// Check if edited
 		this.wasEdited = this.lastUpdatedDate.getTime() !== this.publishedDate.getTime();
-
-		// Update permissions
 		this.updatePermissions();
-
-		// Update label
 		this.updateLabel();
 	}
 
-	/**
-	 * Update this comment with new data from server
-	 * Returns true if the comment was actually changed
-	 */
 	public update(newServerComment: PRComment): boolean {
 		// Check if content or metadata changed
 		const contentChanged = this.serverComment.content !== newServerComment.content;
@@ -258,42 +194,30 @@ export class AzDOComment extends CommentBase {
 			this.serverComment.lastUpdatedDate.getTime() !== newServerComment.lastUpdatedDate.getTime();
 
 		if (!contentChanged && !editTimeChanged) {
-			return false; // No changes
+			return false;
 		}
 
-		// Update stored comment
 		this.serverComment = newServerComment;
 		this.lastUpdatedDate = newServerComment.lastUpdatedDate;
 		this.wasEdited = this.lastUpdatedDate.getTime() !== this.publishedDate.getTime();
 
-		// Update body if content changed
 		if (contentChanged) {
 			this._body = this.formatBody(newServerComment.content);
 		}
 
-		// Update label
 		this.updateLabel();
 
 		return true;
 	}
 
-	/**
-	 * Get the raw server comment data
-	 */
 	public getServerComment(): PRComment {
 		return this.serverComment;
 	}
 
-	/**
-	 * Check if this comment has suggestion code
-	 */
 	private hasSuggestion(): boolean {
 		return /```suggestion/i.test(this.serverComment.content);
 	}
 
-	/**
-	 * Update permissions based on current user
-	 */
 	private updatePermissions(): void {
 		const canEdit = !!this.currentUserId && this.serverComment.author.id === this.currentUserId;
 		const canDelete = canEdit;
@@ -301,19 +225,14 @@ export class AzDOComment extends CommentBase {
 
 		this.updateContext(canEdit, canDelete, hasSuggestion);
 
-		// Add "editing" context value when in edit mode
 		if (this._mode === vscode.CommentMode.Editing && this._contextValue) {
 			this._contextValue = `${this._contextValue},editing`;
 		}
 	}
 
-	/**
-	 * Update label with metadata
-	 */
 	private updateLabel(): void {
 		const parts: string[] = [];
 
-		// Edited indicator
 		if (this.wasEdited) {
 			parts.push("Edited");
 		}
@@ -321,17 +240,10 @@ export class AzDOComment extends CommentBase {
 		this.label = parts.length > 0 ? parts.join(" • ") : undefined;
 	}
 
-	/**
-	 * Get content for editing
-	 * Returns raw content without markdown formatting
-	 */
 	public getEditableContent(): string {
 		return this.serverComment.content;
 	}
 
-	/**
-	 * Update after a successful edit
-	 */
 	public applyEdit(newContent: string): void {
 		this.serverComment.content = newContent;
 		this.lastUpdatedDate = new Date();
@@ -340,27 +252,17 @@ export class AzDOComment extends CommentBase {
 		this.updateLabel();
 	}
 
-	/**
-	 * Get the parent thread (public accessor for protected property)
-	 */
 	public getThread(): vscode.CommentThread {
 		return this.parent;
 	}
 
-	/**
-	 * Start editing mode for this comment
-	 */
 	public startEdit(): void {
 		this.editingOriginalContent = this.getEditableContent();
 		this._mode = vscode.CommentMode.Editing;
-		// Set body to raw content for editing (not markdown)
 		this._body = this.editingOriginalContent;
 		this.updatePermissions();
 	}
 
-	/**
-	 * Cancel editing and restore original content
-	 */
 	public cancelEdit(): void {
 		if (this.editingOriginalContent !== undefined) {
 			this._body = this.formatBody(this.editingOriginalContent);
@@ -370,20 +272,10 @@ export class AzDOComment extends CommentBase {
 		this.updatePermissions();
 	}
 
-	/**
-	 * Get the edited content (during edit mode)
-	 */
 	public getEditedContent(): string {
-		// Body could be string or MarkdownString during edit
 		return typeof this._body === "string" ? this._body : this._body.value;
 	}
 
-	/**
-	 * Extract suggestion content from comment
-	 * Suggestion format: ```suggestion
-	 * <suggested code>
-	 * ```
-	 */
 	public extractSuggestion(): { content: string; originalLine: number } | null {
 		const content = this.serverComment.content;
 		const match = content.match(/```suggestion\s*\n([\s\S]*?)```/i);

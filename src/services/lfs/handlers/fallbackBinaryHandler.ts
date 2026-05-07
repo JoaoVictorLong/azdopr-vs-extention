@@ -1,19 +1,3 @@
-/**
- * Fallback Binary File Handler for Git LFS Files
- *
- * This handler serves as a catch-all for binary file types that don't have
- * a dedicated handler. It shows a friendly message to the user and optionally
- * offers to download the file.
- *
- * Examples of files handled here:
- * - Excel files (.xlsx, .xls)
- * - Word documents (.docx, .doc)
- * - PowerPoint presentations (.pptx, .ppt)
- * - Video files (.mp4, .mov, .avi)
- * - Audio files (.mp3, .wav)
- * - Archives (.zip, .tar, .gz)
- */
-
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,32 +7,12 @@ import type { LfsFileHandler, PRContext } from "../fileTypeHandlers";
 
 const logger = Logger.getInstance();
 
-/**
- * Fallback handler for unsupported binary file types
- *
- * This handler:
- * 1. Shows an informational message that the file type is not yet supported
- * 2. Offers to save the file to disk for the user to open with an external app
- * 3. Logs details for potential future handler implementation
- */
+/** Catch-all handler for binary file types without a dedicated handler. */
 export class FallbackBinaryHandler implements LfsFileHandler {
-	/**
-	 * This handler can handle ANY file type (it's a catch-all)
-	 * It should be registered LAST in the handler registry
-	 * @returns Always returns true (catch-all handler)
-	 */
 	canHandle(_filePath: string, _mimeType?: string): boolean {
-		// This is a catch-all handler, so it can handle anything
 		return true;
 	}
 
-	/**
-	 * Display a message about the unsupported file type
-	 *
-	 * @param fileContent The file content (not displayed directly)
-	 * @param filePath The file path (for extension and filename)
-	 * @param prContext Context about the PR
-	 */
 	async displayFile(fileContent: Buffer, filePath: string, prContext: PRContext): Promise<void> {
 		const fileName = path.basename(filePath);
 		const fileExt = path.extname(filePath);
@@ -61,7 +25,6 @@ export class FallbackBinaryHandler implements LfsFileHandler {
 			size: fileContent.length,
 		});
 
-		// Show info message with options
 		const action = await vscode.window.showInformationMessage(
 			`Preview not available for ${fileExt} files. File: ${fileName} from PR #${prId}`,
 			"Save to Disk",
@@ -76,16 +39,12 @@ export class FallbackBinaryHandler implements LfsFileHandler {
 		}
 	}
 
-	/**
-	 * Save the file to a user-selected location
-	 */
 	private async saveFileToDisk(
 		fileContent: Buffer,
 		fileName: string,
 		prContext: PRContext,
 	): Promise<void> {
 		try {
-			// Suggest a default location in the user's Downloads folder
 			const defaultUri = vscode.Uri.file(path.join(os.homedir(), "Downloads", fileName));
 
 			const saveUri = await vscode.window.showSaveDialog({
@@ -98,7 +57,6 @@ export class FallbackBinaryHandler implements LfsFileHandler {
 				fs.writeFileSync(saveUri.fsPath, fileContent);
 				vscode.window.showInformationMessage(`File saved: ${saveUri.fsPath}`);
 
-				// Optionally open the file location
 				const openAction = await vscode.window.showInformationMessage(
 					"File saved successfully",
 					"Open File",
@@ -119,12 +77,8 @@ export class FallbackBinaryHandler implements LfsFileHandler {
 		}
 	}
 
-	/**
-	 * Open the file in Azure DevOps web browser
-	 */
 	private async openInBrowser(prContext: PRContext): Promise<void> {
 		try {
-			// Get organization from config
 			const org = vscode.workspace
 				.getConfiguration("azureDevOpsPRViewer")
 				.get<string>("organization", "");
@@ -134,8 +88,6 @@ export class FallbackBinaryHandler implements LfsFileHandler {
 				return;
 			}
 
-			// Build Azure DevOps URL
-			// Note: This is a simplified URL. The actual PR file URL structure may vary
 			const url = `https://dev.azure.com/${org}/${prContext.projectId}/_git/${prContext.repositoryId}/pullrequest/${prContext.pullRequestId}?_a=files&path=${encodeURIComponent(prContext.filePath)}`;
 
 			await vscode.env.openExternal(vscode.Uri.parse(url));
@@ -147,19 +99,7 @@ export class FallbackBinaryHandler implements LfsFileHandler {
 		}
 	}
 
-	/**
-	 * Get generic MIME type
-	 * @returns application/octet-stream (generic binary type)
-	 */
 	getMimeType(_filePath: string): string {
 		return "application/octet-stream";
-	}
-
-	/**
-	 * No cleanup needed for this handler
-	 */
-	dispose(): void {
-		// No resources to clean up
-		logger.debug("[FallbackBinaryHandler] Handler disposed");
 	}
 }

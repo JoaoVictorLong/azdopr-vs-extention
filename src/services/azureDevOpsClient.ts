@@ -98,17 +98,6 @@ export interface PRThread {
 	properties?: Record<string, unknown>;
 }
 
-export interface PRUpdate {
-	updateId: number;
-	createdDate: Date;
-	createdBy: {
-		displayName: string;
-		uniqueName: string;
-		imageUrl?: string;
-	};
-	description?: string;
-}
-
 export interface PRComment {
 	id: number;
 	parentCommentId: number;
@@ -122,14 +111,6 @@ export interface PRComment {
 	publishedDate: Date;
 	lastUpdatedDate: Date;
 	commentType: number;
-}
-
-export interface PRBuildStatus {
-	id: number;
-	name: string;
-	status: string;
-	result?: string;
-	url: string;
 }
 
 /**
@@ -227,27 +208,6 @@ interface AzDOThread {
 		rightFileEnd?: { line: number; offset: number };
 	};
 	properties?: Record<string, unknown>;
-}
-
-interface AzDOUpdate {
-	updateId: number;
-	createdDate: string;
-	createdBy: {
-		displayName: string;
-		uniqueName: string;
-		imageUrl?: string;
-	};
-	description?: string;
-}
-
-interface AzDOBuildStatus {
-	id: number;
-	context?: {
-		name?: string;
-	};
-	description?: string;
-	state: string;
-	targetUrl: string;
 }
 
 interface AzDOThreadCreationRequest {
@@ -357,10 +317,6 @@ export class AzureDevOpsClient {
 		return `https://dev.azure.com/${this.organization}`;
 	}
 
-	/**
-	 * Get the organization URL
-	 * @returns The base organization URL
-	 */
 	public getOrganizationUrl(): string {
 		return this.getBaseUrl();
 	}
@@ -386,30 +342,31 @@ export class AzureDevOpsClient {
 		this.cache.clear();
 	}
 
-	async getProjects(): Promise<Project[]> {
-		this.updateOrganization();
-		const headers = await this.getAuthHeaders();
-		const url = `${this.getBaseUrl()}/_apis/projects?api-version=7.0`;
-		const response = await this.axiosInstance.get(url, { headers });
-		return response.data.value;
+	private mapComment(comment: AzDOComment): PRComment {
+		return {
+			id: comment.id,
+			parentCommentId: comment.parentCommentId,
+			author: comment.author,
+			content: comment.content,
+			publishedDate: new Date(comment.publishedDate),
+			lastUpdatedDate: new Date(comment.lastUpdatedDate),
+			commentType: comment.commentType,
+		};
 	}
 
-	async getRepositories(projectId: string): Promise<Repository[]> {
-		const headers = await this.getAuthHeaders();
-		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories?api-version=7.0`;
-		const response = await this.axiosInstance.get(url, { headers });
-		return response.data.value;
+	private mapThread(thread: AzDOThread): PRThread {
+		return {
+			id: thread.id,
+			publishedDate: new Date(thread.publishedDate),
+			lastUpdatedDate: new Date(thread.lastUpdatedDate),
+			comments: (thread.comments || []).map((c) => this.mapComment(c)),
+			status: thread.status,
+			threadContext: thread.threadContext,
+		};
 	}
 
-	async getPullRequests(projectId: string, repositoryId: string): Promise<PullRequest[]> {
-		const headers = await this.getAuthHeaders();
-		const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
-		const maxPRs = config.get<number>("maxPRsToFetch", 500);
-
-		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests?searchCriteria.status=active&$top=${maxPRs}&api-version=7.0`;
-		const response = await this.axiosInstance.get(url, { headers });
-
-		return response.data.value.map((pr: AzDOPullRequest) => ({
+	private mapPullRequest(pr: AzDOPullRequest): PullRequest {
+		return {
 			pullRequestId: pr.pullRequestId,
 			title: pr.title,
 			description: pr.description || "",
@@ -433,7 +390,33 @@ export class AzureDevOpsClient {
 			sourceRefName: pr.sourceRefName || "",
 			targetRefName: pr.targetRefName || "",
 			isDraft: pr.isDraft || false,
-		}));
+		};
+	}
+
+	async getProjects(): Promise<Project[]> {
+		this.updateOrganization();
+		const headers = await this.getAuthHeaders();
+		const url = `${this.getBaseUrl()}/_apis/projects?api-version=7.0`;
+		const response = await this.axiosInstance.get(url, { headers });
+		return response.data.value;
+	}
+
+	async getRepositories(projectId: string): Promise<Repository[]> {
+		const headers = await this.getAuthHeaders();
+		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories?api-version=7.0`;
+		const response = await this.axiosInstance.get(url, { headers });
+		return response.data.value;
+	}
+
+	async getPullRequests(projectId: string, repositoryId: string): Promise<PullRequest[]> {
+		const headers = await this.getAuthHeaders();
+		const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
+		const maxPRs = config.get<number>("maxPRsToFetch", 500);
+
+		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests?searchCriteria.status=active&$top=${maxPRs}&api-version=7.0`;
+		const response = await this.axiosInstance.get(url, { headers });
+
+		return response.data.value.map((pr: AzDOPullRequest) => this.mapPullRequest(pr));
 	}
 
 	async getAllPullRequests(): Promise<PullRequest[]> {
@@ -510,33 +493,7 @@ export class AzureDevOpsClient {
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}?api-version=7.0`;
 		const response = await this.axiosInstance.get(url, { headers });
 
-		// Transform the raw API response to match the PullRequest interface
-		const pr = response.data as AzDOPullRequest;
-		return {
-			pullRequestId: pr.pullRequestId,
-			title: pr.title,
-			description: pr.description || "",
-			createdBy: pr.createdBy,
-			creationDate: new Date(pr.creationDate),
-			status: pr.status,
-			repository: pr.repository,
-			reviewers: (pr.reviewers || []).map((reviewer: AzDOReviewer) => ({
-				id: reviewer.id,
-				displayName: reviewer.displayName,
-				uniqueName: reviewer.uniqueName,
-				imageUrl: reviewer.imageUrl,
-				vote: reviewer.vote,
-				isRequired: reviewer.isRequired,
-			})),
-			url: pr.url
-				? pr.url
-						.replace("_apis/git/repositories", "_git")
-						.replace("/pullRequests/", "/pullrequest/")
-				: "",
-			sourceRefName: pr.sourceRefName || "",
-			targetRefName: pr.targetRefName || "",
-			isDraft: pr.isDraft || false,
-		};
+		return this.mapPullRequest(response.data as AzDOPullRequest);
 	}
 
 	async getPullRequestIterations(
@@ -587,124 +544,11 @@ export class AzureDevOpsClient {
 
 		logger.debug(`API returned ${response.data.value.length} threads for PR ${pullRequestId}`);
 
-		return response.data.value.map((thread: AzDOThread) => {
-			// Log thread details for debugging
-			logger.debug(
-				`Thread ${thread.id}: has ${thread.comments?.length || 0} comments, isDeleted: ${(thread as unknown as { isDeleted?: boolean }).isDeleted}, status: ${thread.status}`,
-			);
-
-			return {
-				id: thread.id,
-				publishedDate: new Date(thread.publishedDate),
-				lastUpdatedDate: new Date(thread.lastUpdatedDate),
-				comments: (thread.comments || []).map((comment: AzDOComment) => ({
-					id: comment.id,
-					parentCommentId: comment.parentCommentId,
-					author: comment.author,
-					content: comment.content,
-					publishedDate: new Date(comment.publishedDate),
-					lastUpdatedDate: new Date(comment.lastUpdatedDate),
-					commentType: comment.commentType,
-				})),
-				status: thread.status,
-				threadContext: thread.threadContext,
-			};
-		});
-	}
-
-	async getPullRequestUpdates(
-		projectId: string,
-		repositoryId: string,
-		pullRequestId: number,
-	): Promise<PRUpdate[]> {
-		const headers = await this.getAuthHeaders();
-		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/updates?api-version=7.0`;
-
-		try {
-			const response = await this.axiosInstance.get(url, { headers });
-			logger.debug(`API returned ${response.data.value.length} updates for PR ${pullRequestId}`);
-
-			return response.data.value.map((update: AzDOUpdate) => ({
-				updateId: update.updateId,
-				createdDate: new Date(update.createdDate),
-				createdBy: update.createdBy,
-				description: update.description,
-			}));
-		} catch (error) {
-			logger.error("Failed to fetch PR updates", error);
-			return [];
-		}
-	}
-
-	async getPullRequestStatuses(
-		projectId: string,
-		repositoryId: string,
-		pullRequestId: number,
-	): Promise<PRBuildStatus[]> {
-		try {
-			const headers = await this.getAuthHeaders();
-			const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/statuses?api-version=7.0`;
-			const response = await this.axiosInstance.get(url, { headers });
-
-			return response.data.value.map((status: AzDOBuildStatus) => ({
-				id: status.id,
-				name: status.context?.name || status.description || "Build",
-				status: status.state,
-				result: status.state,
-				url: status.targetUrl || "",
-			}));
-		} catch {
-			// Statuses endpoint might not be available for all organizations
-			logger.warn("Failed to fetch PR statuses");
-			return [];
-		}
-	}
-
-	async getFileDiff(
-		projectId: string,
-		repositoryId: string,
-		pullRequestId: number,
-		path: string,
-	): Promise<string> {
-		try {
-			const headers = await this.getAuthHeaders();
-			// Get the PR details to find the source and target commits
-			const prDetails = await this.getPullRequestDetails(projectId, repositoryId, pullRequestId);
-			const sourceCommit = prDetails.lastMergeSourceCommit?.commitId;
-			const targetCommit = prDetails.lastMergeTargetCommit?.commitId;
-
-			if (!sourceCommit || !targetCommit) {
-				return "Unable to fetch diff: commit information not available";
-			}
-
-			// Fetch the file content from both commits
-			const sourceUrl = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent(path)}&versionType=commit&version=${sourceCommit}&api-version=7.0`;
-			const targetUrl = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent(path)}&versionType=commit&version=${targetCommit}&api-version=7.0`;
-
-			const [sourceResponse, targetResponse] = await Promise.allSettled([
-				this.axiosInstance.get(sourceUrl, { headers }),
-				this.axiosInstance.get(targetUrl, { headers }),
-			]);
-
-			const sourceContent = sourceResponse.status === "fulfilled" ? sourceResponse.value.data : "";
-			const targetContent = targetResponse.status === "fulfilled" ? targetResponse.value.data : "";
-
-			// Return a simple diff representation
-			return `Source (${sourceCommit.substring(0, 7)}):\n${sourceContent}\n\nTarget (${targetCommit.substring(0, 7)}):\n${targetContent}`;
-		} catch (error) {
-			logger.error("Failed to fetch file diff", error);
-			return "Unable to fetch diff";
-		}
+		return response.data.value.map((thread: AzDOThread) => this.mapThread(thread));
 	}
 
 	/**
-	 * Create a PR thread with a comment
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param pullRequestId The pull request ID
-	 * @param filePath The file path in the repository (e.g., "/src/file.ts")
-	 * @param lineNumber The line number (1-based)
-	 * @param commentText The comment text
+	 * Create a PR thread with a comment on a specific line
 	 * @param side Which side of the diff: 'base' (left/original) or 'modified' (right/new)
 	 */
 	async createPRThread(
@@ -740,29 +584,12 @@ export class AzureDevOpsClient {
 				filePath: filePath,
 			};
 
-			// Set the appropriate file position based on which side of the diff
 			if (side === "modified") {
-				// Comment on the modified (right) side - the new version
-				requestBody.threadContext.rightFileStart = {
-					line: lineNumber,
-					offset: 1,
-				};
-				requestBody.threadContext.rightFileEnd = {
-					line: lineNumber,
-					offset: 1,
-				};
-			}
-
-			if (side !== "modified") {
-				// Comment on the base (left) side - the original version
-				requestBody.threadContext.leftFileStart = {
-					line: lineNumber,
-					offset: 1,
-				};
-				requestBody.threadContext.leftFileEnd = {
-					line: lineNumber,
-					offset: 1,
-				};
+				requestBody.threadContext.rightFileStart = { line: lineNumber, offset: 1 };
+				requestBody.threadContext.rightFileEnd = { line: lineNumber, offset: 1 };
+			} else {
+				requestBody.threadContext.leftFileStart = { line: lineNumber, offset: 1 };
+				requestBody.threadContext.leftFileEnd = { line: lineNumber, offset: 1 };
 			}
 
 			// Add pull request thread context if we have iteration information
@@ -780,34 +607,10 @@ export class AzureDevOpsClient {
 			headers,
 		});
 
-		// Map the response to our PRThread interface
-		const thread = response.data as AzDOThread;
-		return {
-			id: thread.id,
-			publishedDate: new Date(thread.publishedDate),
-			lastUpdatedDate: new Date(thread.lastUpdatedDate),
-			comments: (thread.comments || []).map((comment: AzDOComment) => ({
-				id: comment.id,
-				parentCommentId: comment.parentCommentId,
-				author: comment.author,
-				content: comment.content,
-				publishedDate: new Date(comment.publishedDate),
-				lastUpdatedDate: new Date(comment.lastUpdatedDate),
-				commentType: comment.commentType,
-			})),
-			status: thread.status,
-			threadContext: thread.threadContext,
-		};
+		return this.mapThread(response.data as AzDOThread);
 	}
 
-	/**
-	 * Create a file-level PR thread (not attached to a specific line)
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param pullRequestId The pull request ID
-	 * @param filePath The file path in the repository
-	 * @param commentText The comment text
-	 */
+	/** Create a file-level PR thread (not attached to a specific line) */
 	async createFileLevelThread(
 		projectId: string,
 		repositoryId: string,
@@ -851,34 +654,10 @@ export class AzureDevOpsClient {
 			headers,
 		});
 
-		const thread = response.data as AzDOThread;
-		return {
-			id: thread.id,
-			publishedDate: new Date(thread.publishedDate),
-			lastUpdatedDate: new Date(thread.lastUpdatedDate),
-			comments: (thread.comments || []).map((comment: AzDOComment) => ({
-				id: comment.id,
-				parentCommentId: comment.parentCommentId,
-				author: comment.author,
-				content: comment.content,
-				publishedDate: new Date(comment.publishedDate),
-				lastUpdatedDate: new Date(comment.lastUpdatedDate),
-				commentType: comment.commentType,
-			})),
-			status: thread.status,
-			threadContext: thread.threadContext,
-		};
+		return this.mapThread(response.data as AzDOThread);
 	}
 
-	/**
-	 * Add a reply comment to an existing PR thread
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param pullRequestId The pull request ID
-	 * @param threadId The thread ID to reply to
-	 * @param commentText The comment text
-	 * @returns The created comment
-	 */
+	/** Add a reply comment to an existing PR thread */
 	async replyToPRThread(
 		projectId: string,
 		repositoryId: string,
@@ -898,29 +677,10 @@ export class AzureDevOpsClient {
 			headers,
 		});
 
-		// Map the response to our PRComment interface
-		const comment = response.data;
-		return {
-			id: comment.id,
-			parentCommentId: comment.parentCommentId,
-			author: comment.author,
-			content: comment.content,
-			publishedDate: new Date(comment.publishedDate),
-			lastUpdatedDate: new Date(comment.lastUpdatedDate),
-			commentType: comment.commentType,
-		};
+		return this.mapComment(response.data as AzDOComment);
 	}
 
-	/**
-	 * Update an existing comment in a PR thread
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param pullRequestId The pull request ID
-	 * @param threadId The thread ID
-	 * @param commentId The comment ID to update
-	 * @param commentText The new comment text
-	 * @returns The updated comment
-	 */
+	/** Update an existing comment in a PR thread */
 	async updateComment(
 		projectId: string,
 		repositoryId: string,
@@ -940,26 +700,10 @@ export class AzureDevOpsClient {
 			headers,
 		});
 
-		const comment = response.data;
-		return {
-			id: comment.id,
-			parentCommentId: comment.parentCommentId,
-			author: comment.author,
-			content: comment.content,
-			publishedDate: new Date(comment.publishedDate),
-			lastUpdatedDate: new Date(comment.lastUpdatedDate),
-			commentType: comment.commentType,
-		};
+		return this.mapComment(response.data as AzDOComment);
 	}
 
-	/**
-	 * Delete a comment from a PR thread
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param pullRequestId The pull request ID
-	 * @param threadId The thread ID
-	 * @param commentId The comment ID to delete
-	 */
+	/** Delete a comment from a PR thread */
 	async deleteComment(
 		projectId: string,
 		repositoryId: string,
@@ -975,11 +719,7 @@ export class AzureDevOpsClient {
 
 	/**
 	 * Update PR thread status (resolve/unresolve)
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param pullRequestId The pull request ID
-	 * @param threadId The thread ID
-	 * @param status The new status (1 = Active, 2 = Fixed/Resolved, 4 = Closed)
+	 * @param status 1 = Active, 2 = Fixed/Resolved, 4 = Closed
 	 */
 	async updateThreadStatus(
 		projectId: string,
@@ -998,14 +738,7 @@ export class AzureDevOpsClient {
 		await this.axiosInstance.patch(url, requestBody, { headers });
 	}
 
-	/**
-	 * Fetch file content from Azure DevOps repository at a specific version
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param path The file path (e.g., "/src/file.ts")
-	 * @param version The version (commit SHA, branch name, or tag)
-	 * @returns The file content as a string
-	 */
+	/** Fetch file content from Azure DevOps repository at a specific version (commit SHA or branch name) */
 	async getFileContent(
 		projectId: string,
 		repositoryId: string,
@@ -1014,27 +747,17 @@ export class AzureDevOpsClient {
 	): Promise<string> {
 		try {
 			const headers = await this.getAuthHeaders();
-			// Azure DevOps Git Items API expects paths without leading slash
-			// Strip leading slash if present
 			const normalizedPath = path.startsWith("/") ? path.substring(1) : path;
 
-			// Encode each path segment separately to preserve forward slashes
-			// This handles paths with spaces like "LaunchPoint Core/Wiki/file.md"
+			// Encode each segment separately to preserve forward slashes (handles paths with spaces)
 			const encodedPath = normalizedPath
 				.split("/")
 				.map((segment) => encodeURIComponent(segment))
 				.join("/");
 
-			// Determine versionType based on version format
-			// If version looks like a SHA (40 hex chars), use commit, otherwise use branch
 			const versionType = /^[0-9a-f]{40}$/i.test(version) ? "commit" : "branch";
 
-			// Don't encode the version parameter - Azure DevOps API expects plain branch names
-			// e.g., "main" not "main" encoded
-			const versionParam = version;
-
-			// Add includeContent=true to get the actual file content
-			const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/items?path=${encodedPath}&versionType=${versionType}&version=${versionParam}&includeContent=true&api-version=7.0`;
+			const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/items?path=${encodedPath}&versionType=${versionType}&version=${version}&includeContent=true&api-version=7.0`;
 
 			logger.debug("AzureDevOpsClient: Fetching file:", {
 				originalPath: path,
@@ -1046,13 +769,10 @@ export class AzureDevOpsClient {
 
 			const response = await this.axiosInstance.get(url, { headers });
 
-			// The API returns JSON with a 'content' field containing the file content
-			// The content has escaped newlines (\n) that need to be converted to actual newlines
+			// API returns JSON with escaped newlines in the content field
 			if (response.data && typeof response.data === "object" && "content" in response.data) {
-				// Extract the content field and replace escaped newlines with actual newlines
 				const content = response.data.content;
 
-				// Check if content is a valid string
 				if (content && typeof content === "string") {
 					return content
 						.replaceAll(String.raw`\n`, "\n")
@@ -1060,19 +780,16 @@ export class AzureDevOpsClient {
 						.replaceAll(String.raw`\t`, "\t");
 				}
 
-				// If content exists but is not a string, or is empty, return empty string
 				if (content !== null && content !== undefined) {
 					logger.warn(`Unexpected content type for file ${path}: ${typeof content}`);
 				}
 				return "";
 			}
 
-			// Fallback: if response is already a string, return it
 			if (typeof response.data === "string") {
 				return response.data;
 			}
 
-			// If we get here, something unexpected happened
 			throw new Error(`Unexpected response format for file: ${path}`);
 		} catch (error) {
 			if (axios.isAxiosError(error)) {
@@ -1091,20 +808,8 @@ export class AzureDevOpsClient {
 	}
 
 	/**
-	 * Fetch file content with optional LFS resolution
-	 *
-	 * This method extends the basic getFileContent() to support Git LFS files.
-	 * When resolveLfs=true, Azure DevOps API automatically resolves LFS pointer
-	 * files to their actual binary content.
-	 *
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param path The file path (e.g., "/docs/manual.pdf")
-	 * @param version The commit SHA or branch name
-	 * @param resolveLfs If true, resolve LFS pointer files to actual content (default: false)
-	 * @param downloadType 'text' for text content (string), 'binary' for Buffer (default: 'text')
-	 * @returns Promise resolving to string (text) or Buffer (binary) depending on downloadType
-	 * @throws Error if file not found or download fails
+	 * Fetch file content with optional LFS resolution.
+	 * When resolveLfs=true, LFS pointer files are resolved to their actual content.
 	 */
 	async getFileContentWithLfs(
 		projectId: string,
@@ -1116,28 +821,21 @@ export class AzureDevOpsClient {
 	): Promise<string | Buffer> {
 		try {
 			const headers = await this.getAuthHeaders();
-			// Azure DevOps Git Items API expects paths without leading slash
 			const normalizedPath = path.startsWith("/") ? path.substring(1) : path;
-
-			// Encode each path segment separately to preserve forward slashes
 			const encodedPath = normalizedPath
 				.split("/")
 				.map((segment) => encodeURIComponent(segment))
 				.join("/");
-
-			// Determine versionType based on version format
 			const versionType = /^[0-9a-f]{40}$/i.test(version) ? "commit" : "branch";
 
-			// Build query parameters
 			const params = new URLSearchParams({
 				path: encodedPath,
-				versionType: versionType,
-				version: version,
+				versionType,
+				version,
 				includeContent: "true",
-				"api-version": "7.1", // Upgraded from 7.0 for LFS support
+				"api-version": "7.1",
 			});
 
-			// Add resolveLfs parameter if requested
 			if (resolveLfs) {
 				params.append("resolveLfs", "true");
 			}
@@ -1207,12 +905,7 @@ export class AzureDevOpsClient {
 
 	/**
 	 * Create or update a reviewer vote on a pull request
-	 * @param projectId The project ID
-	 * @param repositoryId The repository ID
-	 * @param pullRequestId The pull request ID
-	 * @param reviewerId The reviewer's ID
-	 * @param vote The vote value: 10 = approved, 5 = approved with suggestions, 0 = no vote, -5 = waiting for author, -10 = rejected
-	 * @returns The updated reviewer object
+	 * @param vote 10 = approved, 5 = approved with suggestions, 0 = no vote, -5 = waiting for author, -10 = rejected
 	 */
 	async createReviewerVote(
 		projectId: string,
@@ -1224,9 +917,7 @@ export class AzureDevOpsClient {
 		const headers = await this.getAuthHeaders();
 		const url = `${this.getBaseUrl()}/${projectId}/_apis/git/repositories/${repositoryId}/pullrequests/${pullRequestId}/reviewers/${reviewerId}?api-version=7.0`;
 
-		const requestBody = {
-			vote: vote,
-		};
+		const requestBody = { vote };
 
 		const response = await this.axiosInstance.put(url, requestBody, {
 			headers,
@@ -1235,10 +926,7 @@ export class AzureDevOpsClient {
 		return response.data;
 	}
 
-	/**
-	 * Get the current authenticated user's identity
-	 * @returns The user's identity information including ID
-	 */
+	/** Get the current authenticated user's identity */
 	async getCurrentUser(): Promise<{
 		id: string;
 		displayName: string;
@@ -1258,19 +946,13 @@ export class AzureDevOpsClient {
 		};
 	}
 
-	/**
-	 * Fetch a profile image URL and convert it to a data URI
-	 * Images are cached to avoid repeated fetches
-	 * @param imageUrl The Azure DevOps image URL
-	 * @returns Data URI string or undefined if fetch fails
-	 */
+	/** Fetch a profile image URL and convert it to a data URI (cached for 1 hour) */
 	async getImageAsDataUri(imageUrl: string): Promise<string | undefined> {
 		if (!imageUrl) {
 			logger.debug("AzureDevOpsClient: No image URL provided");
 			return undefined;
 		}
 
-		// Check cache first (images cached for 1 hour)
 		const cacheKey = `image:${imageUrl}`;
 		const cached = this.cache.get(cacheKey);
 		if (cached && Date.now() - cached.timestamp < cached.ttl) {

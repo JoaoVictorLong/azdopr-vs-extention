@@ -47,12 +47,10 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		}
 
 		if (element.contextValue === "project") {
-			// Return repos for this project
 			return element.children || [];
 		}
 
 		if (element.contextValue === "repository") {
-			// Return PRs for this repo
 			return element.children || [];
 		}
 
@@ -60,18 +58,15 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	}
 
 	private async getRootChildren(): Promise<PRTreeItem[]> {
-		// Don't show anything until we've initialized (prevents flash of sign-in during load)
 		if (!this.hasInitialized) {
 			return [];
 		}
 
-		// Check authentication
 		const isAuthenticated = await this.authProvider.isAuthenticated();
 		if (!isAuthenticated) {
 			return this.createSignInItem();
 		}
 
-		// Root level - fetch and display PRs
 		return this.fetchAndDisplayPullRequests();
 	}
 
@@ -96,11 +91,8 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 
 	private async fetchAndDisplayPullRequests(): Promise<PRTreeItem[]> {
 		try {
-			// Show cached PRs immediately if available
 			const hasCachedData = this.pullRequests.length > 0 && !this.isRefreshing;
 			if (hasCachedData) {
-				// Only trigger background refresh if enough time has passed since last refresh
-				// This prevents infinite refresh loops
 				const now = Date.now();
 				const timeSinceLastRefresh = now - this.lastRefreshTime;
 				if (timeSinceLastRefresh > this.minRefreshIntervalMs) {
@@ -110,7 +102,6 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 				return this.getGroupedByProjectView();
 			}
 
-			// First load - wait for data
 			this.lastRefreshTime = Date.now();
 			await this.fetchPullRequests();
 
@@ -130,9 +121,7 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		this.fetchPullRequests()
 			.then(() => {
 				this.isRefreshing = false;
-				// Update the last refresh time to prevent immediate re-trigger
 				this.lastRefreshTime = Date.now();
-				// Fire the tree data change to update the view with fresh data
 				this.refresh();
 			})
 			.catch((error) => {
@@ -146,57 +135,19 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		this.pullRequests = await this.azureDevOpsClient.getAllPullRequests();
 	}
 
-	/**
-	 * Create hierarchical tree view grouped by Project → Repository → PRs
-	 *
-	 * ## Data Structure
-	 *
-	 * This method uses a nested Map structure to build the hierarchy:
-	 *
-	 * ```
-	 * Map<ProjectName, Map<RepositoryName, PullRequest[]>>
-	 *   │
-	 *   ├─ "MyProject" →  Map<RepoName, PR[]>
-	 *   │                  │
-	 *   │                  ├─ "frontend" → [PR #123, PR #124]
-	 *   │                  └─ "backend"  → [PR #125]
-	 *   │
-	 *   └─ "OtherProject" → Map<RepoName, PR[]>
-	 *                       └─ "api" → [PR #126, PR #127]
-	 * ```
-	 *
-	 * ## Sorting Strategy
-	 *
-	 * 1. **Projects**: Alphabetical by project name
-	 * 2. **Repositories**: Alphabetical by repository name (within each project)
-	 * 3. **Pull Requests**: By creation date, oldest first (within each repository)
-	 *
-	 * ## Tree Item Hierarchy
-	 *
-	 * ```
-	 * Projects (expanded by default)
-	 *   └─ Repositories (collapsed by default, show PR count)
-	 *        └─ Individual PRs (show title, author, age)
-	 * ```
-	 *
-	 * @returns Array of tree items representing the project hierarchy
-	 */
 	private getGroupedByProjectView(): PRTreeItem[] {
-		// Build nested Map: Project → Repository → PRs
 		const projectMap = new Map<string, Map<string, PullRequest[]>>();
 
 		for (const pr of this.pullRequests) {
 			const projectName = pr.repository.project.name;
 			const repoName = pr.repository.name;
 
-			// Get or create the repository map for this project
 			let repoMap = projectMap.get(projectName);
 			if (!repoMap) {
 				repoMap = new Map();
 				projectMap.set(projectName, repoMap);
 			}
 
-			// Get or create the PR array for this repository
 			if (!repoMap.has(repoName)) {
 				repoMap.set(repoName, []);
 			}
@@ -204,10 +155,8 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			repoMap.get(repoName)?.push(pr);
 		}
 
-		// Create tree items
 		const projectItems: PRTreeItem[] = [];
 
-		// Sort projects alphabetically
 		const sortedProjects = Array.from(projectMap.entries()).sort((a, b) =>
 			a[0].localeCompare(b[0]),
 		);
@@ -216,18 +165,15 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			const repoItems: PRTreeItem[] = [];
 			let projectPRCount = 0;
 
-			// Sort repositories alphabetically
 			const sortedRepos = Array.from(repoMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
 			for (const [repoName, prs] of sortedRepos) {
 				projectPRCount += prs.length;
 
-				// Sort PRs within repo by actionability (needs review first)
 				const sortedPRs = this.sortPRsByActionability(prs);
 
 				const prItems = sortedPRs.map((pr) => this.createPRTreeItem(pr));
 
-				// Count PRs that need current user's review
 				const needsReviewCount = prs.filter((pr) => this.needsCurrentUserReview(pr)).length;
 
 				const repoItem = new PRTreeItem(
@@ -241,7 +187,6 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 				repoItem.children = prItems;
 				repoItem.iconPath = new vscode.ThemeIcon("repo", new vscode.ThemeColor("charts.yellow"));
 
-				// Add badge showing PRs needing review
 				if (needsReviewCount > 0) {
 					repoItem.badge = {
 						value: needsReviewCount,
@@ -280,27 +225,18 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		const myReviewStatus = this.getCurrentUserReviewStatus(pr);
 		const isBlocked = this.isPRBlocked(pr);
 
-		// Build description with status context
 		const statusInfo = this.getStatusDescription(pr, isBlocked, myReviewStatus);
 		const ageWarning = ageInDays >= 14 ? " • ⚠️ Stale" : ageInDays >= 7 ? " • Aging" : "";
 		const description = `${pr.createdBy.displayName} • ${ageText}${ageWarning}${statusInfo}`;
 
 		const item = new PRTreeItem(pr.title, description, vscode.TreeItemCollapsibleState.None, pr);
-
-		// Set icon and color based on review status (visual priority system)
 		item.iconPath = this.getPRIcon(pr, isAuthor, needsReview, myReviewStatus, isBlocked);
-
-		// Set context value for menu actions
 		item.contextValue = "pullrequest";
-
-		// Make it clickable - open in webview panel
 		item.command = {
 			command: "azureDevOpsPRs.viewPR",
 			title: "View Pull Request",
 			arguments: [pr],
 		};
-
-		// Add tooltip with more details
 		item.tooltip = this.createTooltip(pr, ageText);
 
 		return item;
@@ -314,7 +250,6 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	private needsCurrentUserReview(pr: PullRequest): boolean {
 		if (!this.currentUserId || !pr.reviewers) return false;
 		const myReview = pr.reviewers.find((r) => r.uniqueName === this.currentUserId);
-		// Needs review if user is a reviewer but hasn't voted yet
 		return myReview !== undefined && myReview.vote === REVIEWER_VOTE.NO_VOTE;
 	}
 
@@ -390,27 +325,22 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		myReviewStatus: number | null,
 		isBlocked: boolean,
 	): vscode.ThemeIcon {
-		// Draft PRs always gray
 		if (pr.isDraft) {
 			return new vscode.ThemeIcon("git-pull-request-draft", new vscode.ThemeColor("charts.gray"));
 		}
 
-		// Your own PRs - blue
 		if (isAuthor) {
 			return new vscode.ThemeIcon("git-pull-request-create", new vscode.ThemeColor("charts.blue"));
 		}
 
-		// Blocked by rejection - red
 		if (isBlocked) {
 			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.red"));
 		}
 
-		// Needs your review - orange (high visibility)
 		if (needsReview) {
 			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.orange"));
 		}
 
-		// You approved - green
 		if (
 			myReviewStatus === REVIEWER_VOTE.APPROVED ||
 			myReviewStatus === REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS
@@ -418,12 +348,10 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.green"));
 		}
 
-		// You rejected - red
 		if (myReviewStatus === REVIEWER_VOTE.REJECTED) {
 			return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.red"));
 		}
 
-		// Default - green (active PR)
 		return new vscode.ThemeIcon("git-pull-request", new vscode.ThemeColor("charts.green"));
 	}
 
@@ -431,7 +359,6 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 		const tooltip = new vscode.MarkdownString();
 		tooltip.appendMarkdown(`### ${pr.title}\n\n`);
 
-		// Add your review status
 		const isAuthor = this.isCurrentUserAuthor(pr);
 		const needsReview = this.needsCurrentUserReview(pr);
 		const myStatus = this.getCurrentUserReviewStatus(pr);
@@ -492,15 +419,15 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	private getVoteIcon(vote: number): string {
 		switch (vote) {
 			case REVIEWER_VOTE.APPROVED:
-				return "✅"; // Approved
+				return "✅";
 			case REVIEWER_VOTE.APPROVED_WITH_SUGGESTIONS:
-				return "👍"; // Approved with suggestions
+				return "👍";
 			case REVIEWER_VOTE.NO_VOTE:
-				return "⏸️"; // No vote
+				return "⏸️";
 			case REVIEWER_VOTE.WAITING_FOR_AUTHOR:
-				return "⏳"; // Waiting for author
+				return "⏳";
 			case REVIEWER_VOTE.REJECTED:
-				return "❌"; // Rejected
+				return "❌";
 			default:
 				return "❓";
 		}

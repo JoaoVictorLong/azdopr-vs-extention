@@ -6,7 +6,7 @@
  */
 
 import * as vscode from "vscode";
-import { AzureDevOpsUrlParser } from "../utils/azureDevOpsUrlParser";
+import { normalizeRepoName, parseAzureDevOpsUrl } from "../utils/azureDevOpsUrlParser";
 import { Logger } from "../utils/logger";
 import type { PullRequest } from "./azureDevOpsClient";
 import type { GitRemote, GitRepository, GitService } from "./gitService";
@@ -75,7 +75,7 @@ export class RepositoryMatchingService {
 				continue;
 			}
 
-			const parsed = AzureDevOpsUrlParser.parse(remote.fetchUrl);
+			const parsed = parseAzureDevOpsUrl(remote.fetchUrl);
 			if (!parsed) {
 				continue;
 			}
@@ -109,15 +109,15 @@ export class RepositoryMatchingService {
 	 * @returns Confidence level
 	 */
 	private calculateMatchConfidence(
-		parsed: ReturnType<typeof AzureDevOpsUrlParser.parse>,
+		parsed: ReturnType<typeof parseAzureDevOpsUrl>,
 		pr: PullRequest,
 	): "exact" | "partial" | "none" {
 		if (!parsed) {
 			return "none";
 		}
 
-		const normalizedRemoteRepo = AzureDevOpsUrlParser.normalizeRepoName(parsed.repository);
-		const normalizedPrRepo = AzureDevOpsUrlParser.normalizeRepoName(pr.repository.name);
+		const normalizedRemoteRepo = normalizeRepoName(parsed.repository);
+		const normalizedPrRepo = normalizeRepoName(pr.repository.name);
 
 		// Exact match: org + project + repo all match
 		if (
