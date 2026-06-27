@@ -206,7 +206,7 @@
     "viewsWelcome": [
       {
         "view": "azureDevOpsPRs",
-        "contents": "Welcome to Azure DevOps PR Viewer!\n\nTo get started, sign in to your Azure DevOps account.\n\n[Sign In to Azure DevOps PR Viewer](command:azureDevOpsPRs.signIn)\n\nOnce signed in, you'll see all pull requests from your organization.",
+        "contents": "Welcome to Azure DevOps PR Viewer!\n\nTo get started, set the **azureDevOpsPRViewer.organization** and **azureDevOpsPRViewer.patToken** settings, or sign in with your Microsoft account.\n\n[Sign In to Azure DevOps PR Viewer](command:azureDevOpsPRs.signIn)\n\nOnce authenticated, you'll see all pull requests from your organization.",
         "when": "!azureDevOpsPRs:authenticated"
       }
     ],
@@ -260,6 +260,11 @@
             "pdf"
           ],
           "description": "File types to handle as LFS files (e.g., pdf, xlsx, png)"
+        },
+        "azureDevOpsPRViewer.patToken": {
+          "type": "string",
+          "default": "",
+          "description": "Personal Access Token (PAT) for Azure DevOps. If set, the extension will use PAT authentication instead of Microsoft account sign-in."
         },
         "azureDevOpsPRViewer.comments.autoCollapseResolved": {
           "type": "boolean",

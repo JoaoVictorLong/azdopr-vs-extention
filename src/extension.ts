@@ -56,6 +56,10 @@ export async function activate(context: vscode.ExtensionContext) {
 		isAuthenticated,
 	);
 
+	if (authProvider.isPatAuth()) {
+		logger.info("PAT authentication configured");
+	}
+
 	azureDevOpsClient = new AzureDevOpsClient(authProvider);
 	pullRequestProvider = new PullRequestProvider(azureDevOpsClient, authProvider);
 	vscode.window.registerTreeDataProvider("azureDevOpsPRs", pullRequestProvider);
@@ -189,7 +193,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 		}),
 		vscode.authentication.onDidChangeSessions(async (e) => {
-			if (e.provider.id === "microsoft") {
+			if (e.provider.id === "microsoft" && !authProvider.isPatAuth()) {
 				const isAuthenticated = await authProvider.isAuthenticated();
 				await vscode.commands.executeCommand(
 					"setContext",

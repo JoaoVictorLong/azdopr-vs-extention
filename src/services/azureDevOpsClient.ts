@@ -305,6 +305,11 @@ export class AzureDevOpsClient {
 		if (!token) {
 			throw new Error("Not authenticated");
 		}
+		const scheme = this.authProvider.getAuthScheme();
+		if (scheme === "Basic") {
+			const encoded = Buffer.from(`:${token}`).toString("base64");
+			return { Authorization: `Basic ${encoded}` };
+		}
 		return {
 			Authorization: `Bearer ${token}`,
 		};

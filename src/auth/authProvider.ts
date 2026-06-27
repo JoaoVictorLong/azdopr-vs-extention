@@ -1,9 +1,5 @@
 import * as vscode from "vscode";
 
-/**
- * Azure DevOps Authentication Provider using Microsoft Entra OAuth
- * Uses VS Code's built-in Microsoft authentication with the user_impersonation scope
- */
 export class AzureDevOpsAuthProvider {
 	private static readonly AZURE_DEVOPS_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798";
 	private static readonly SCOPES = [
@@ -12,7 +8,24 @@ export class AzureDevOpsAuthProvider {
 
 	private currentSession: vscode.AuthenticationSession | null = null;
 
+	private getPatToken(): string {
+		const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
+		return config.get<string>("patToken", "");
+	}
+
+	isPatAuth(): boolean {
+		return this.getPatToken() !== "";
+	}
+
+	getAuthScheme(): "Basic" | "Bearer" {
+		return this.isPatAuth() ? "Basic" : "Bearer";
+	}
+
 	async signIn(): Promise<void> {
+		if (this.isPatAuth()) {
+			return;
+		}
+
 		const session = await vscode.authentication.getSession(
 			"microsoft",
 			AzureDevOpsAuthProvider.SCOPES,
@@ -27,13 +40,15 @@ export class AzureDevOpsAuthProvider {
 	}
 
 	async signOut(): Promise<void> {
-		// Clear the current session reference
-		// Note: VS Code manages authentication sessions centrally
-		// Users can fully sign out through VS Code's Accounts menu
 		this.currentSession = null;
 	}
 
 	async getAccessToken(): Promise<string | null> {
+		const pat = this.getPatToken();
+		if (pat) {
+			return pat;
+		}
+
 		if (this.currentSession?.accessToken) {
 			return this.currentSession.accessToken;
 		}
@@ -53,6 +68,9 @@ export class AzureDevOpsAuthProvider {
 	}
 
 	async isAuthenticated(): Promise<boolean> {
+		if (this.isPatAuth()) {
+			return true;
+		}
 		const token = await this.getAccessToken();
 		return token !== null;
 	}
