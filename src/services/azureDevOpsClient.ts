@@ -192,7 +192,7 @@ export class AzureDevOpsClient {
 			imageUrl?: string;
 		}>)[] = [
 			async () => {
-				const url = `${this.getBaseUrl()}/_apis/ConnectionData?api-version=7.0`;
+				const url = `${this.getBaseUrl()}/_apis/ConnectionData?api-version=7.1-preview.1`;
 				const res = await this.axiosInstance.get(url, { headers });
 				const u = res.data.authenticatedUser;
 				return { id: u.id, displayName: u.displayName, uniqueName: u.uniqueName, imageUrl: u.imageUrl };
