@@ -1,14 +1,14 @@
 {
-  "name": "azdopr",
-  "displayName": "Azure DevOps PR Viewer",
-  "description": "View all Pull Requests across your entire Azure DevOps organization in one place",
+  "name": "azdopr-fork",
+  "displayName": "Azure DevOps PR Viewer (Fork)",
+  "description": "View all Pull Requests across your entire Azure DevOps organization in one place — fork with PAT authentication support",
   "version": "1.8.1",
-  "author": "John C. Waters",
-  "publisher": "johncwaters",
+  "author": "JoaoVictorLong",
+  "publisher": "joaovictorlong",
   "license": "MIT",
-  "repository": "https://github.com/johncwaters/azdopr",
-  "bugs": "https://github.com/johncwaters/azdopr/issues",
-  "homepage": "https://github.com/johncwaters/azdopr#readme",
+  "repository": "https://github.com/JoaoVictorLong/azdopr-vs-extention",
+  "bugs": "https://github.com/JoaoVictorLong/azdopr-vs-extention/issues",
+  "homepage": "https://github.com/JoaoVictorLong/azdopr-vs-extention#readme",
   "icon": "resources/azdopr-icon.png",
   "engines": {
     "vscode": "^1.105.0"

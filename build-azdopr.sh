@@ -189,8 +189,14 @@ ENDOFFILE
 echo "==> Compilando..."
 npm run compile:extension
 
-echo "==> Gerando VSIX..."
-npx @vscode/vsce package --no-dependencies
+echo "==> Limpando VSIXs antigos..."
+rm -f *.vsix
+
+echo "==> Gerando VSIX (incluindo dependencias)..."
+npx @vscode/vsce package
+
+echo "==> Removendo extensao original (johncwaters.azdopr)..."
+code --uninstall-extension johncwaters.azdopr 2>/dev/null || true
 
 echo "==> Instalando no VS Code..."
 VSIX=$(ls *.vsix 2>/dev/null | head -1)
@@ -198,7 +204,7 @@ if [ -n "$VSIX" ]; then
   code --install-extension "$VSIX" --force
   echo ""
   echo "=== Pronto! ==="
-  echo "Extensao '$VSIX' instalada no VS Code."
+  echo "Extensao '$VSIX' (joaovictorlong.azdopr-fork) instalada."
   echo "Recarregue o VS Code (Ctrl+Shift+P -> Developer: Reload Window)"
 else
   echo ""
