@@ -17,6 +17,9 @@
     "Other"
   ],
   "main": "./out/extension.js",
+  "activationEvents": [
+    "onView:azureDevOpsPRs"
+  ],
   "contributes": {
     "commands": [
       {
