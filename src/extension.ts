@@ -171,6 +171,7 @@ class PRDetailPanel {
 
 	static async createOrShow(extensionUri: vscode.Uri, pr: PullRequest, auth: AzureDevOpsAuthProvider) {
 		if (PRDetailPanel.current) {
+			PRDetailPanel.current.pr = pr;
 			PRDetailPanel.current.panel.reveal(vscode.ViewColumn.Beside);
 			await PRDetailPanel.current.render(pr, auth.isPatAuth());
 			return;
@@ -187,6 +188,7 @@ class PRDetailPanel {
 		await PRDetailPanel.current.render(pr, auth.isPatAuth());
 
 		panel.webview.onDidReceiveMessage((msg) => {
+			const currentPr = PRDetailPanel.current!.pr;
 			if (msg.type === "vote" && typeof msg.vote === "number") {
 				vscode.commands.executeCommand(
 					msg.vote === 10 ? "azureDevOpsPRs.approve" :
@@ -194,12 +196,12 @@ class PRDetailPanel {
 					msg.vote === -10 ? "azureDevOpsPRs.reject" :
 					msg.vote === -5 ? "azureDevOpsPRs.waitForAuthor" :
 					"azureDevOpsPRs.resetVote",
-					{ pullRequest: pr },
+					{ pullRequest: currentPr },
 				);
 			} else if (msg.type === "addComment" && typeof msg.text === "string" && msg.text.trim()) {
-				azureDevOpsClient.addPRComment(pr, msg.text.trim()).then(() => {
-					vscode.window.showInformationMessage(`Comment added to PR #${pr.pullRequestId}`);
-					PRDetailPanel.current?.render(pr, auth.isPatAuth());
+				azureDevOpsClient.addPRComment(currentPr, msg.text.trim()).then(() => {
+					vscode.window.showInformationMessage(`Comment added to PR #${currentPr.pullRequestId}`);
+					PRDetailPanel.current?.render(PRDetailPanel.current.pr, auth.isPatAuth());
 				}).catch((err) => {
 					vscode.window.showErrorMessage(`Failed to add comment: ${err}`);
 				});
@@ -226,7 +228,7 @@ class PRDetailPanel {
 		let threadsHtml = "";
 		try {
 			const threads = await azureDevOpsClient.getPRThreads(pr);
-			const textThreads = threads.filter((t) => t.comments?.length > 0 && t.comments[0].commentType === 1);
+			const textThreads = threads.filter((t) => t.comments?.length > 0);
 			if (textThreads.length > 0) {
 				threadsHtml = textThreads
 					.map((t) => {
