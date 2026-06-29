@@ -283,6 +283,23 @@
           ],
           "description": "File types to handle as LFS files (e.g., pdf, xlsx, png)"
         },
+        "azureDevOpsPRViewer.prFilter": {
+          "type": "string",
+          "default": "all",
+          "enum": [
+            "all",
+            "createdByMe",
+            "needsMyReview",
+            "assignedToMe"
+          ],
+          "enumDescriptions": [
+            "Show all active pull requests",
+            "Only pull requests I created",
+            "Only pull requests needing my review (I haven't voted yet)",
+            "Only pull requests where I am a reviewer"
+          ],
+          "description": "Filter which pull requests to display"
+        },
         "azureDevOpsPRViewer.patToken": {
           "type": "string",
           "default": "",

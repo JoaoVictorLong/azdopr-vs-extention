@@ -106,7 +106,11 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 			await this.fetchPullRequests();
 
 			if (this.pullRequests.length === 0) {
-				return [new PRTreeItem("No pull requests found", "", vscode.TreeItemCollapsibleState.None)];
+				const filter = vscode.workspace
+					.getConfiguration("azureDevOpsPRViewer")
+					.get<string>("prFilter", "all");
+				const msg = filter === "all" ? "No pull requests found" : `No pull requests matching "${filter}" filter`;
+				return [new PRTreeItem(msg, "", vscode.TreeItemCollapsibleState.None)];
 			}
 
 			return this.getGroupedByProjectView();
@@ -132,7 +136,29 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 	}
 
 	private async fetchPullRequests(): Promise<void> {
-		this.pullRequests = await this.azureDevOpsClient.getAllPullRequests();
+		let prs = await this.azureDevOpsClient.getAllPullRequests();
+
+		const filter = vscode.workspace
+			.getConfiguration("azureDevOpsPRViewer")
+			.get<string>("prFilter", "all");
+
+		if (filter !== "all" && this.currentUserId) {
+			prs = prs.filter((pr) => {
+				switch (filter) {
+					case "createdByMe":
+						return pr.createdBy.uniqueName === this.currentUserId;
+					case "needsMyReview":
+						return this.needsCurrentUserReview(pr);
+					case "assignedToMe":
+						if (!pr.reviewers) return false;
+						return pr.reviewers.some((r) => r.uniqueName === this.currentUserId);
+					default:
+						return true;
+				}
+			});
+		}
+
+		this.pullRequests = prs;
 	}
 
 	private getGroupedByProjectView(): PRTreeItem[] {
