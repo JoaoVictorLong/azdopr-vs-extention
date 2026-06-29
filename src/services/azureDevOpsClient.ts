@@ -168,6 +168,15 @@ export class AzureDevOpsClient {
 		return (response.data.value || []).map((pr: AzDOPullRequest) => this.mapPullRequest(pr));
 	}
 
+	async voteOnPullRequest(pr: PullRequest, vote: number): Promise<void> {
+		this.updateOrganization();
+		const headers = await this.getAuthHeaders();
+		const user = await this.getCurrentUser();
+		const baseUrl = this.getBaseUrl();
+		const url = `${baseUrl}/${pr.repository.project.name}/_apis/git/repositories/${pr.repository.name}/pullRequests/${pr.pullRequestId}/reviewers/${user.id}?api-version=7.0`;
+		await this.axiosInstance.put(url, { vote }, { headers });
+	}
+
 	async getCurrentUser(): Promise<{
 		id: string;
 		displayName: string;

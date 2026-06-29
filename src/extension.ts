@@ -82,6 +82,29 @@ export async function activate(context: vscode.ExtensionContext) {
 		await vscode.env.openExternal(vscode.Uri.parse(url));
 	};
 
+	const voteOnPR = (vote: number) => async (arg: unknown) => {
+		const pr = extractPullRequest(arg as Parameters<typeof extractPullRequest>[0]);
+		if (!pr) {
+			vscode.window.showErrorMessage("Unable to vote: invalid argument");
+			return;
+		}
+		try {
+			await azureDevOpsClient.voteOnPullRequest(pr, vote);
+			const labels: Record<number, string> = {
+				10: "Approved",
+				5: "Approved with suggestions",
+				0: "Reset vote",
+				[-5]: "Waiting for author",
+				[-10]: "Rejected",
+			};
+			vscode.window.showInformationMessage(`Vote: ${labels[vote] || vote} on PR #${pr.pullRequestId}`);
+			azureDevOpsClient.clearCache();
+			pullRequestProvider.refresh();
+		} catch (error) {
+			vscode.window.showErrorMessage(`Vote failed: ${error}`);
+		}
+	};
+
 	const viewPRDetails = async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
 		const pr = extractPullRequest(arg);
 		if (!pr) {
@@ -97,6 +120,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand("azureDevOpsPRs.signOut", signOut),
 		vscode.commands.registerCommand("azureDevOpsPRs.openPR", openInBrowser),
 		vscode.commands.registerCommand("azureDevOpsPRs.viewPR", viewPRDetails),
+		vscode.commands.registerCommand("azureDevOpsPRs.approve", voteOnPR(10)),
+		vscode.commands.registerCommand("azureDevOpsPRs.approveWithSuggestions", voteOnPR(5)),
+		vscode.commands.registerCommand("azureDevOpsPRs.reject", voteOnPR(-10)),
+		vscode.commands.registerCommand("azureDevOpsPRs.waitForAuthor", voteOnPR(-5)),
+		vscode.commands.registerCommand("azureDevOpsPRs.resetVote", voteOnPR(0)),
 		vscode.workspace.onDidChangeConfiguration((e) => {
 			if (e.affectsConfiguration("azureDevOpsPRViewer.autoRefreshInterval")) {
 				setupAutoRefresh();
@@ -150,11 +178,24 @@ class PRDetailPanel {
 			"azdoPrDetail",
 			`PR #${pr.pullRequestId}`,
 			vscode.ViewColumn.Beside,
-			{ enableScripts: false },
+			{ enableScripts: true },
 		);
 
 		PRDetailPanel.current = new PRDetailPanel(panel);
 		PRDetailPanel.current.render(pr, auth.isPatAuth());
+
+		panel.webview.onDidReceiveMessage((msg) => {
+			if (msg.type === "vote" && typeof msg.vote === "number") {
+				vscode.commands.executeCommand(
+					msg.vote === 10 ? "azureDevOpsPRs.approve" :
+					msg.vote === 5 ? "azureDevOpsPRs.approveWithSuggestions" :
+					msg.vote === -10 ? "azureDevOpsPRs.reject" :
+					msg.vote === -5 ? "azureDevOpsPRs.waitForAuthor" :
+					"azureDevOpsPRs.resetVote",
+					{ pullRequest: pr },
+				);
+			}
+		});
 
 		panel.onDidDispose(() => {
 			PRDetailPanel.current = undefined;
@@ -190,11 +231,28 @@ td { padding: 4px 8px; }
 .label { color: var(--vscode-descriptionForeground); width: 100px; }
 .branches { font-family: monospace; font-size: 13px; }
 .pat-notice { font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 16px; font-style: italic; }
+.vote-row { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.vote-btn { padding: 6px 14px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; cursor: pointer; font-size: 13px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+.vote-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.vote-btn.approve { background: #2ea043; color: #fff; }
+.vote-btn.approve:hover { background: #3fb950; }
+.vote-btn.reject { background: #da3633; color: #fff; }
+.vote-btn.reject:hover { background: #f85149; }
+.vote-btn.wait { background: #d29922; color: #fff; }
+.vote-btn.wait:hover { background: #e3b341; }
 </style>
 </head>
 <body>
 <h1>${pr.title} ${draftBadge}</h1>
 <div class="meta">#${pr.pullRequestId} opened ${fmtDate(pr.creationDate)} by ${pr.createdBy.displayName}</div>
+
+<div class="vote-row">
+<button class="vote-btn approve" onclick="vote(10)">✅ Approve</button>
+<button class="vote-btn" onclick="vote(5)">👍 Approve w/ Suggestions</button>
+<button class="vote-btn reject" onclick="vote(-10)">❌ Reject</button>
+<button class="vote-btn wait" onclick="vote(-5)">⏳ Wait for Author</button>
+<button class="vote-btn" onclick="vote(0)">↩ Reset Vote</button>
+</div>
 
 <div class="section">
 <h2>Branches</h2>
@@ -209,6 +267,10 @@ ${pr.description ? `<div class="section"><h2>Description</h2><div class="desc">$
 </div>
 
 ${isPat ? '<div class="pat-notice">Using PAT authentication — comments and avatars are not available</div>' : ""}
+<script>
+const api = acquireVsCodeApi();
+function vote(val) { api.postMessage({ type: "vote", vote: val }); }
+</script>
 </body>
 </html>`;
 	}

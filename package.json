@@ -51,6 +51,36 @@
         "command": "azureDevOpsPRs.viewPR",
         "title": "View Pull Request Details",
         "category": "Azure DevOps PR Viewer"
+      },
+      {
+        "command": "azureDevOpsPRs.approve",
+        "title": "Approve",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(check)"
+      },
+      {
+        "command": "azureDevOpsPRs.approveWithSuggestions",
+        "title": "Approve with Suggestions",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "azureDevOpsPRs.reject",
+        "title": "Reject",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(x)"
+      },
+      {
+        "command": "azureDevOpsPRs.waitForAuthor",
+        "title": "Waiting for Author",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(watch)"
+      },
+      {
+        "command": "azureDevOpsPRs.resetVote",
+        "title": "Reset Vote",
+        "category": "Azure DevOps PR Viewer",
+        "icon": "$(clear-all)"
       }
     ],
     "viewsContainers": {
@@ -89,6 +119,31 @@
           "command": "azureDevOpsPRs.viewPR",
           "when": "view == azureDevOpsPRs && viewItem == pullrequest",
           "group": "inline@2"
+        },
+        {
+          "command": "azureDevOpsPRs.approve",
+          "when": "view == azureDevOpsPRs && viewItem == pullrequest",
+          "group": "2_vote@1"
+        },
+        {
+          "command": "azureDevOpsPRs.approveWithSuggestions",
+          "when": "view == azureDevOpsPRs && viewItem == pullrequest",
+          "group": "2_vote@2"
+        },
+        {
+          "command": "azureDevOpsPRs.reject",
+          "when": "view == azureDevOpsPRs && viewItem == pullrequest",
+          "group": "2_vote@3"
+        },
+        {
+          "command": "azureDevOpsPRs.waitForAuthor",
+          "when": "view == azureDevOpsPRs && viewItem == pullrequest",
+          "group": "2_vote@4"
+        },
+        {
+          "command": "azureDevOpsPRs.resetVote",
+          "when": "view == azureDevOpsPRs && viewItem == pullrequest",
+          "group": "2_vote@5"
         }
       ]
     },
