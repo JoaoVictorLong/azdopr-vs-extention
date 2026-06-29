@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { AzureDevOpsAuthProvider } from "./auth/authProvider";
 import { PullRequestProvider } from "./providers/pullRequestProvider";
-import { AzureDevOpsClient, type PullRequest } from "./services/azureDevOpsClient";
+import { AzureDevOpsClient, type PullRequest, type PRThread, type PRFileChange } from "./services/azureDevOpsClient";
 import { Logger } from "./utils/logger";
 
 const logger = Logger.getInstance();
@@ -205,6 +205,13 @@ class PRDetailPanel {
 				}).catch((err) => {
 					vscode.window.showErrorMessage(`Failed to add comment: ${err}`);
 				});
+			} else if (msg.type === "addInlineComment" && typeof msg.filePath === "string" && typeof msg.line === "number" && typeof msg.text === "string" && msg.text.trim()) {
+				azureDevOpsClient.createInlineComment(currentPr, msg.filePath, msg.line, msg.text.trim()).then(() => {
+					vscode.window.showInformationMessage(`Inline comment added on ${msg.filePath}:${msg.line}`);
+					PRDetailPanel.current?.render(PRDetailPanel.current.pr, auth.isPatAuth());
+				}).catch((err) => {
+					vscode.window.showErrorMessage(`Failed to add inline comment: ${err}`);
+				});
 			}
 		});
 
@@ -225,23 +232,55 @@ class PRDetailPanel {
 			})
 			.join("");
 
-		let threadsHtml = "";
-		try {
-			const threads = await azureDevOpsClient.getPRThreads(pr);
-			const textThreads = threads.filter((t) => t.comments?.length > 0);
-			if (textThreads.length > 0) {
-				threadsHtml = textThreads
-					.map((t) => {
-						const c = t.comments[0];
-						return `<div class="comment"><div class="comment-author">${this.escapeHtml(c.author.displayName)}</div><div class="comment-date">${fmtDateTime(c.publishedDate)}</div><div class="comment-text">${this.escapeHtml(c.content)}</div></div>`;
-					})
-					.join("");
+		let [files, threads] = await Promise.all([
+			azureDevOpsClient.getPRChanges(pr).catch(() => [] as PRFileChange[]),
+			azureDevOpsClient.getPRThreads(pr).catch(() => [] as PRThread[]),
+		]);
+
+		const fileCommentMap = new Map<string, PRThread[]>();
+		const generalThreads: PRThread[] = [];
+		for (const t of threads) {
+			if (!t.comments?.length) continue;
+			const ctx = t.threadContext || t.pullRequestThreadContext;
+			if (ctx?.filePath) {
+				const list = fileCommentMap.get(ctx.filePath) || [];
+				list.push(t);
+				fileCommentMap.set(ctx.filePath, list);
 			} else {
-				threadsHtml = '<div class="empty">No comments yet</div>';
+				generalThreads.push(t);
 			}
-		} catch {
-			threadsHtml = '<div class="empty">Unable to load comments</div>';
 		}
+
+		const filesHtml = files.length > 0
+			? files.map((f) => {
+					const icon = f.changeType === "add" ? "🟢" : f.changeType === "delete" ? "🔴" : "✏️";
+					const inlineCount = fileCommentMap.get(f.filePath)?.length || 0;
+					const badge = inlineCount > 0 ? ` <span class="file-badge">${inlineCount}</span>` : "";
+					return `<div class="file-row" onclick="toggleInlineForm('${this.escapeHtml(f.filePath)}')">
+						<span class="file-icon">${icon}</span>
+						<span class="file-path">${this.escapeHtml(f.filePath)}</span>${badge}
+						<span class="file-change">${f.changeType}</span>
+					</div>
+					<div class="inline-form" id="form-${this.escapeHtml(f.filePath)}">
+						${inlineCount > 0 ? fileCommentMap.get(f.filePath)!.map((t) => {
+							const c = t.comments[0];
+							const ctx2 = t.threadContext || t.pullRequestThreadContext;
+							const line = ctx2?.rightFileStart?.line || "?";
+							return `<div class="inline-comment"><span class="inline-line">Line ${line}</span><div class="comment-author">${this.escapeHtml(c.author.displayName)}</div><div class="comment-text">${this.escapeHtml(c.content)}</div></div>`;
+						}).join("") : ""}
+						<input class="inline-line-input" id="line-${this.escapeHtml(f.filePath)}" type="number" min="1" placeholder="Line number" />
+						<textarea class="inline-textarea" id="text-${this.escapeHtml(f.filePath)}" rows="2" placeholder="Comment on this line..."></textarea>
+						<button class="send-btn" onclick="sendInline('${this.escapeHtml(f.filePath)}')">Comment on line</button>
+					</div>`;
+				}).join("")
+			: '<div class="empty">Unable to load changed files</div>';
+
+		const generalHtml = generalThreads.length > 0
+			? generalThreads.map((t) => {
+					const c = t.comments[0];
+					return `<div class="comment"><div class="comment-author">${this.escapeHtml(c.author.displayName)}</div><div class="comment-date">${fmtDateTime(c.publishedDate)}</div><div class="comment-text">${this.escapeHtml(c.content)}</div></div>`;
+				}).join("")
+			: '<div class="empty">No comments yet</div>';
 
 		const draftBadge = pr.isDraft ? '<span style="background:#666;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">Draft</span>' : "";
 
@@ -258,7 +297,6 @@ h1 { font-size: 18px; margin: 0 0 4px; }
 .desc { white-space: pre-wrap; font-size: 13px; line-height: 1.5; background: var(--vscode-textBlockQuote-background); padding: 12px; border-radius: 4px; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 td { padding: 4px 8px; }
-.label { color: var(--vscode-descriptionForeground); width: 100px; }
 .branches { font-family: monospace; font-size: 13px; }
 .pat-notice { font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 16px; font-style: italic; }
 .vote-row { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -279,6 +317,18 @@ td { padding: 4px 8px; }
 .comment-input:focus { outline: 1px solid var(--vscode-focusBorder); }
 .send-btn { padding: 6px 16px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
 .send-btn:hover { background: var(--vscode-button-hoverBackground); }
+.file-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; border-radius: 4px; font-size: 13px; }
+.file-row:hover { background: var(--vscode-list-hoverBackground); }
+.file-icon { flex-shrink: 0; }
+.file-path { flex: 1; word-break: break-all; font-family: monospace; }
+.file-change { font-size: 11px; color: var(--vscode-descriptionForeground); text-transform: uppercase; }
+.file-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 11px; font-weight: 600; }
+.inline-form { display: none; padding: 8px 8px 8px 28px; }
+.inline-form.open { display: block; }
+.inline-comment { margin-bottom: 8px; padding: 8px; background: var(--vscode-textBlockQuote-background); border-radius: 4px; }
+.inline-line { font-size: 11px; color: var(--vscode-descriptionForeground); font-family: monospace; display: block; margin-bottom: 4px; }
+.inline-line-input { width: 100px; box-sizing: border-box; padding: 4px 8px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border-radius: 4px; font-size: 13px; margin-bottom: 6px; }
+.inline-textarea { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border-radius: 4px; font-family: inherit; font-size: 13px; resize: vertical; margin-bottom: 6px; }
 </style>
 </head>
 <body>
@@ -306,8 +356,13 @@ ${pr.description ? `<div class="section"><h2>Description</h2><div class="desc">$
 </div>
 
 <div class="section">
+<h2>Files Changed (${files.length})</h2>
+${filesHtml}
+</div>
+
+<div class="section">
 <h2>Comments</h2>
-${threadsHtml}
+${generalHtml}
 <textarea class="comment-input" rows="3" placeholder="Leave a comment..."></textarea>
 <button class="send-btn" onclick="sendComment()">Comment</button>
 </div>
@@ -321,6 +376,18 @@ function sendComment() {
 	if (text.trim()) {
 		api.postMessage({ type: "addComment", text: text.trim() });
 		document.querySelector('.comment-input').value = "";
+	}
+}
+function toggleInlineForm(path) {
+	const el = document.getElementById('form-' + path);
+	if (el) el.classList.toggle('open');
+}
+function sendInline(path) {
+	const line = document.getElementById('line-' + path).value;
+	const text = document.getElementById('text-' + path).value;
+	if (line && text.trim()) {
+		api.postMessage({ type: "addInlineComment", filePath: path, line: parseInt(line), text: text.trim() });
+		document.getElementById('text-' + path).value = "";
 	}
 }
 </script>

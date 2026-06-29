@@ -39,11 +39,25 @@ export interface PullRequest {
 	isDraft: boolean;
 }
 
+export interface PRFileChange {
+	changeType: string;
+	filePath: string;
+}
+
 export interface PRThread {
 	id: number;
 	comments: PRComment[];
 	status: string;
-	pullRequestThreadContext?: unknown;
+	threadContext?: {
+		filePath: string;
+		rightFileStart?: { line: number; offset: number };
+		rightFileEnd?: { line: number; offset: number };
+	};
+	pullRequestThreadContext?: {
+		filePath: string;
+		rightFileStart?: { line: number; offset: number };
+		rightFileEnd?: { line: number; offset: number };
+	};
 }
 
 export interface PRComment {
@@ -192,6 +206,37 @@ export class AzureDevOpsClient {
 		const url = `${baseUrl}/${pr.repository.project.name}/_apis/git/repositories/${pr.repository.name}/pullRequests/${pr.pullRequestId}/threads?api-version=7.0`;
 		const res = await this.axiosInstance.get(url, { headers });
 		return (res.data.value || []) as PRThread[];
+	}
+
+	async getPRChanges(pr: PullRequest): Promise<PRFileChange[]> {
+		this.updateOrganization();
+		const headers = await this.getAuthHeaders();
+		const baseUrl = this.getBaseUrl();
+		const url = `${baseUrl}/${pr.repository.project.name}/_apis/git/repositories/${pr.repository.name}/pullRequests/${pr.pullRequestId}/iterations/1/changes?api-version=7.0`;
+		const res = await this.axiosInstance.get(url, { headers });
+		return (res.data.changeEntries || []).map((ch: { item: { path: string }; changeType: string }) => ({
+			changeType: ch.changeType,
+			filePath: ch.item.path,
+		}));
+	}
+
+	async createInlineComment(pr: PullRequest, filePath: string, line: number, text: string): Promise<void> {
+		this.updateOrganization();
+		const headers = await this.getAuthHeaders();
+		const baseUrl = this.getBaseUrl();
+		const url = `${baseUrl}/${pr.repository.project.name}/_apis/git/repositories/${pr.repository.name}/pullRequests/${pr.pullRequestId}/threads?api-version=7.0`;
+		await this.axiosInstance.post(
+			url,
+			{
+				comments: [{ parentCommentId: 0, content: text, commentType: 1 }],
+				threadContext: {
+					filePath,
+					rightFileStart: { line, offset: 1 },
+					rightFileEnd: { line, offset: 1 },
+				},
+			},
+			{ headers },
+		);
 	}
 
 	async addPRComment(pr: PullRequest, text: string): Promise<void> {
