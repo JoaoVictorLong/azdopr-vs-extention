@@ -319,7 +319,7 @@ export class AzureDevOpsClient {
 		if (!this.organization) {
 			throw new Error("Organization not configured");
 		}
-		return `https://dev.azure.com/${this.organization}`;
+		return `https://dev.azure.com/${this.organization.replace(/\/+$/, "")}`;
 	}
 
 	public getOrganizationUrl(): string {
