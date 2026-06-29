@@ -939,17 +939,43 @@ export class AzureDevOpsClient {
 		imageUrl?: string;
 	}> {
 		const headers = await this.getAuthHeaders();
-		const url = `${this.getBaseUrl()}/_apis/connectionData?api-version=7.0`;
 
-		const response = await this.axiosInstance.get(url, { headers });
-		const user = response.data.authenticatedUser;
+		const strategies: (() => Promise<{
+			id: string;
+			displayName: string;
+			uniqueName: string;
+			imageUrl?: string;
+		}>)[] = [
+			// Strategy 1: ConnectionData on dev.azure.com (PascalCase)
+			async () => {
+				const url = `${this.getBaseUrl()}/_apis/ConnectionData?api-version=7.0`;
+				const res = await this.axiosInstance.get(url, { headers });
+				const u = res.data.authenticatedUser;
+				return { id: u.id, displayName: u.displayName, uniqueName: u.uniqueName, imageUrl: u.imageUrl };
+			},
+			// Strategy 2: Organization-scoped VSSPS profile endpoint
+			async () => {
+				const org = this.organization.replace(/\/+$/, "");
+				const url = `https://vssps.dev.azure.com/${org}/_apis/profile/profiles/me?api-version=7.0`;
+				const res = await this.axiosInstance.get(url, { headers });
+				return {
+					id: res.data.id,
+					displayName: res.data.displayName,
+					uniqueName: res.data.emailAddress || res.data.publicAlias,
+					imageUrl: res.data.coreAttributes?.Avatar?.value?.value,
+				};
+			},
+		];
 
-		return {
-			id: user.id,
-			displayName: user.displayName,
-			uniqueName: user.uniqueName,
-			imageUrl: user.imageUrl,
-		};
+		for (const strategy of strategies) {
+			try {
+				return await strategy();
+			} catch {
+				continue;
+			}
+		}
+
+		throw new Error("Failed to fetch current user from all endpoints");
 	}
 
 	/** Fetch a profile image URL and convert it to a data URI (cached for 1 hour) */
