@@ -39,6 +39,21 @@ export interface PullRequest {
 	isDraft: boolean;
 }
 
+export interface PRThread {
+	id: number;
+	comments: PRComment[];
+	status: string;
+	pullRequestThreadContext?: unknown;
+}
+
+export interface PRComment {
+	id: number;
+	content: string;
+	commentType: number;
+	author: { id: string; displayName: string; uniqueName: string };
+	publishedDate: string;
+}
+
 export interface Project {
 	id: string;
 	name: string;
@@ -168,6 +183,27 @@ export class AzureDevOpsClient {
 		const response = await this.axiosInstance.get(url, { headers });
 
 		return (response.data.value || []).map((pr: AzDOPullRequest) => this.mapPullRequest(pr));
+	}
+
+	async getPRThreads(pr: PullRequest): Promise<PRThread[]> {
+		this.updateOrganization();
+		const headers = await this.getAuthHeaders();
+		const baseUrl = this.getBaseUrl();
+		const url = `${baseUrl}/${pr.repository.project.name}/_apis/git/repositories/${pr.repository.name}/pullRequests/${pr.pullRequestId}/threads?api-version=7.0`;
+		const res = await this.axiosInstance.get(url, { headers });
+		return (res.data.value || []) as PRThread[];
+	}
+
+	async addPRComment(pr: PullRequest, text: string): Promise<void> {
+		this.updateOrganization();
+		const headers = await this.getAuthHeaders();
+		const baseUrl = this.getBaseUrl();
+		const url = `${baseUrl}/${pr.repository.project.name}/_apis/git/repositories/${pr.repository.name}/pullRequests/${pr.pullRequestId}/threads?api-version=7.0`;
+		await this.axiosInstance.post(
+			url,
+			{ comments: [{ parentCommentId: 0, content: text, commentType: 1 }] },
+			{ headers },
+		);
 	}
 
 	async voteOnPullRequest(pr: PullRequest, vote: number): Promise<void> {

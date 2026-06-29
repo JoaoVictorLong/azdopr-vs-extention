@@ -162,15 +162,17 @@ export function deactivate() {
 class PRDetailPanel {
 	static current: PRDetailPanel | undefined;
 	private panel: vscode.WebviewPanel;
+	private pr: PullRequest;
 
-	private constructor(panel: vscode.WebviewPanel) {
+	private constructor(panel: vscode.WebviewPanel, pr: PullRequest) {
 		this.panel = panel;
+		this.pr = pr;
 	}
 
-	static createOrShow(extensionUri: vscode.Uri, pr: PullRequest, auth: AzureDevOpsAuthProvider) {
+	static async createOrShow(extensionUri: vscode.Uri, pr: PullRequest, auth: AzureDevOpsAuthProvider) {
 		if (PRDetailPanel.current) {
 			PRDetailPanel.current.panel.reveal(vscode.ViewColumn.Beside);
-			PRDetailPanel.current.render(pr, auth.isPatAuth());
+			await PRDetailPanel.current.render(pr, auth.isPatAuth());
 			return;
 		}
 
@@ -181,8 +183,8 @@ class PRDetailPanel {
 			{ enableScripts: true },
 		);
 
-		PRDetailPanel.current = new PRDetailPanel(panel);
-		PRDetailPanel.current.render(pr, auth.isPatAuth());
+		PRDetailPanel.current = new PRDetailPanel(panel, pr);
+		await PRDetailPanel.current.render(pr, auth.isPatAuth());
 
 		panel.webview.onDidReceiveMessage((msg) => {
 			if (msg.type === "vote" && typeof msg.vote === "number") {
@@ -194,6 +196,13 @@ class PRDetailPanel {
 					"azureDevOpsPRs.resetVote",
 					{ pullRequest: pr },
 				);
+			} else if (msg.type === "addComment" && typeof msg.text === "string" && msg.text.trim()) {
+				azureDevOpsClient.addPRComment(pr, msg.text.trim()).then(() => {
+					vscode.window.showInformationMessage(`Comment added to PR #${pr.pullRequestId}`);
+					PRDetailPanel.current?.render(pr, auth.isPatAuth());
+				}).catch((err) => {
+					vscode.window.showErrorMessage(`Failed to add comment: ${err}`);
+				});
 			}
 		});
 
@@ -202,8 +211,9 @@ class PRDetailPanel {
 		});
 	}
 
-	private render(pr: PullRequest, isPat: boolean) {
+	private async render(pr: PullRequest, isPat: boolean) {
 		const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+		const fmtDateTime = (d: string) => new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 		const reviewerRows = (pr.reviewers || [])
 			.map((r) => {
@@ -212,6 +222,24 @@ class PRDetailPanel {
 				return `<tr><td>${voteIcon}</td><td>${r.displayName}${required}</td></tr>`;
 			})
 			.join("");
+
+		let threadsHtml = "";
+		try {
+			const threads = await azureDevOpsClient.getPRThreads(pr);
+			const textThreads = threads.filter((t) => t.comments?.length > 0 && t.comments[0].commentType === 1);
+			if (textThreads.length > 0) {
+				threadsHtml = textThreads
+					.map((t) => {
+						const c = t.comments[0];
+						return `<div class="comment"><div class="comment-author">${this.escapeHtml(c.author.displayName)}</div><div class="comment-date">${fmtDateTime(c.publishedDate)}</div><div class="comment-text">${this.escapeHtml(c.content)}</div></div>`;
+					})
+					.join("");
+			} else {
+				threadsHtml = '<div class="empty">No comments yet</div>';
+			}
+		} catch {
+			threadsHtml = '<div class="empty">Unable to load comments</div>';
+		}
 
 		const draftBadge = pr.isDraft ? '<span style="background:#666;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">Draft</span>' : "";
 
@@ -240,6 +268,15 @@ td { padding: 4px 8px; }
 .vote-btn.reject:hover { background: #f85149; }
 .vote-btn.wait { background: #d29922; color: #fff; }
 .vote-btn.wait:hover { background: #e3b341; }
+.comment { margin-bottom: 12px; padding: 10px; background: var(--vscode-textBlockQuote-background); border-radius: 4px; }
+.comment-author { font-weight: 600; font-size: 13px; }
+.comment-date { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; }
+.comment-text { font-size: 13px; white-space: pre-wrap; }
+.empty { font-size: 13px; color: var(--vscode-descriptionForeground); font-style: italic; }
+.comment-input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border-radius: 4px; font-family: inherit; font-size: 13px; resize: vertical; margin-bottom: 8px; }
+.comment-input:focus { outline: 1px solid var(--vscode-focusBorder); }
+.send-btn { padding: 6px 16px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.send-btn:hover { background: var(--vscode-button-hoverBackground); }
 </style>
 </head>
 <body>
@@ -266,10 +303,24 @@ ${pr.description ? `<div class="section"><h2>Description</h2><div class="desc">$
 <table>${reviewerRows}</table>
 </div>
 
-${isPat ? '<div class="pat-notice">Using PAT authentication — comments and avatars are not available</div>' : ""}
+<div class="section">
+<h2>Comments</h2>
+${threadsHtml}
+<textarea class="comment-input" rows="3" placeholder="Leave a comment..."></textarea>
+<button class="send-btn" onclick="sendComment()">Comment</button>
+</div>
+
+${isPat ? '<div class="pat-notice">Using PAT authentication — avatars are not available</div>' : ""}
 <script>
 const api = acquireVsCodeApi();
 function vote(val) { api.postMessage({ type: "vote", vote: val }); }
+function sendComment() {
+	const text = document.querySelector('.comment-input').value;
+	if (text.trim()) {
+		api.postMessage({ type: "addComment", text: text.trim() });
+		document.querySelector('.comment-input').value = "";
+	}
+}
 </script>
 </body>
 </html>`;
