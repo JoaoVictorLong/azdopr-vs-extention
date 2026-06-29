@@ -939,15 +939,16 @@ export class AzureDevOpsClient {
 		imageUrl?: string;
 	}> {
 		const headers = await this.getAuthHeaders();
-		const url = "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.0";
+		const url = `${this.getBaseUrl()}/_apis/connectionData?api-version=7.0`;
 
 		const response = await this.axiosInstance.get(url, { headers });
+		const user = response.data.authenticatedUser;
 
 		return {
-			id: response.data.id,
-			displayName: response.data.displayName,
-			uniqueName: response.data.emailAddress || response.data.publicAlias,
-			imageUrl: response.data.coreAttributes?.Avatar?.value?.value,
+			id: user.id,
+			displayName: user.displayName,
+			uniqueName: user.uniqueName,
+			imageUrl: user.imageUrl,
 		};
 	}
 
