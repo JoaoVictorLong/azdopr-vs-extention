@@ -192,7 +192,7 @@ export class AzureDevOpsClient {
 			imageUrl?: string;
 		}>)[] = [
 			async () => {
-				const url = `${this.getBaseUrl()}/_apis/ConnectionData?api-version=7.1-preview.1`;
+				const url = `${this.getBaseUrl()}/_apis/ConnectionData?api-version=7.0-preview`;
 				const res = await this.axiosInstance.get(url, { headers });
 				const u = res.data.authenticatedUser;
 				return { id: u.id, displayName: u.displayName, uniqueName: u.uniqueName, imageUrl: u.imageUrl };
@@ -201,11 +201,32 @@ export class AzureDevOpsClient {
 				const org = this.organization.replace(/\/+$/, "");
 				const url = `https://vssps.dev.azure.com/${org}/_apis/profile/profiles/me?api-version=7.0`;
 				const res = await this.axiosInstance.get(url, { headers });
+				const uniqueName = res.data.emailAddress || res.data.publicAlias;
 				return {
 					id: res.data.id,
 					displayName: res.data.displayName,
-					uniqueName: res.data.emailAddress || res.data.publicAlias,
+					uniqueName,
 					imageUrl: res.data.coreAttributes?.Avatar?.value?.value,
+				};
+			},
+			async () => {
+				const org = this.organization.replace(/\/+$/, "");
+				const profile = await this.axiosInstance.get(
+					`https://vssps.dev.azure.com/${org}/_apis/profile/profiles/me?api-version=7.0`,
+					{ headers },
+				);
+				const email = profile.data.emailAddress || profile.data.publicAlias;
+				const identities = await this.axiosInstance.get(
+					`https://vssps.dev.azure.com/${org}/_apis/identities?searchFilter=General&filterValue=${encodeURIComponent(email)}&api-version=7.0`,
+					{ headers },
+				);
+				const identity = identities.data.value?.[0];
+				if (!identity) throw new Error("Identity not found");
+				return {
+					id: identity.id,
+					displayName: identity.displayName || profile.data.displayName,
+					uniqueName: identity.providerDisplayName || email,
+					imageUrl: profile.data.coreAttributes?.Avatar?.value?.value,
 				};
 			},
 		];
