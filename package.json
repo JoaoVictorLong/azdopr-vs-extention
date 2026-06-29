@@ -18,7 +18,26 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onView:azureDevOpsPRs"
+    "onView:azureDevOpsPRs",
+    "onCommand:azureDevOpsPRs.refresh",
+    "onCommand:azureDevOpsPRs.signIn",
+    "onCommand:azureDevOpsPRs.signOut",
+    "onCommand:azureDevOpsPRs.openPR",
+    "onCommand:azureDevOpsPRs.viewPR",
+    "onCommand:azureDevOpsPRs.refreshComments",
+    "onCommand:azureDevOpsPRs.clearLfsCache",
+    "onCommand:azureDevOpsPRs.checkoutBranch",
+    "onCommand:azureDevOpsPRs.signin",
+    "onCommand:azureDevOpsPRs.singin",
+    "onCommand:azuredevopsprs.signin",
+    "onCommand:azuredevopsprs.singin",
+    "onCommand:azuredevopsprs.refresh",
+    "onCommand:azuredevopsprs.signout",
+    "onCommand:azuredevopsprs.openpr",
+    "onCommand:azuredevopsprs.viewpr",
+    "onCommand:azuredevopsprs.refreshcomments",
+    "onCommand:azuredevopsprs.clearlfscache",
+    "onCommand:azuredevopsprs.checkoutbranch"
   ],
   "contributes": {
     "commands": [

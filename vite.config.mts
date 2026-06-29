@@ -15,6 +15,7 @@ export default defineConfig({
         "http",
         "https",
         "crypto",
+        "node:crypto",
         "stream",
         "util",
         "buffer",
@@ -45,4 +46,3 @@ export default defineConfig({
     })
   ],
 });
-

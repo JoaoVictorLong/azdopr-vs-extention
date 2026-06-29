@@ -84,109 +84,132 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const checkoutHandler = new CheckoutBranchCommandHandler(gitService, repositoryMatchingService);
 
+	const refreshPullRequests = () => {
+		azureDevOpsClient.clearCache();
+		pullRequestProvider.refresh();
+	};
+
+	const signIn = async () => {
+		try {
+			await authProvider.signIn();
+			await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", true);
+			vscode.window.showInformationMessage("Successfully signed in to Azure DevOps PR Viewer");
+			pullRequestProvider.refresh();
+		} catch (error) {
+			vscode.window.showErrorMessage(`Sign in failed: ${error}`);
+		}
+	};
+
+	const signOut = async () => {
+		await authProvider.signOut();
+		await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", false);
+		vscode.window.showInformationMessage("Signed out from Azure DevOps PR Viewer");
+		pullRequestProvider.refresh();
+	};
+
+	const openPullRequest = async (
+		arg: string | { pullRequest: PullRequest } | PullRequest | undefined,
+	) => {
+		if (typeof arg === "string") {
+			await vscode.env.openExternal(vscode.Uri.parse(arg));
+			return;
+		}
+
+		const pr = extractPullRequest(arg);
+		if (!pr) {
+			vscode.window.showErrorMessage("Unable to open PR: invalid argument");
+			return;
+		}
+
+		const org = vscode.workspace
+			.getConfiguration("azureDevOpsPRViewer")
+			.get<string>("organization", "");
+		const url = buildPRUrl(pr, org);
+		await vscode.env.openExternal(vscode.Uri.parse(url));
+	};
+
+	const viewPullRequest = async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
+		const pr = extractPullRequest(arg);
+		if (!pr) {
+			vscode.window.showErrorMessage("Unable to view PR: invalid argument");
+			return;
+		}
+
+		await PullRequestViewerPanel.createOrShow(
+			context.extensionUri,
+			azureDevOpsClient,
+			pr,
+			reviewedFilesService,
+		);
+	};
+
+	const clearLfsCache = async () => {
+		try {
+			const lfsCache = new LfsCache(context);
+			const stats = lfsCache.getStats();
+
+			if (stats.fileCount === 0) {
+				vscode.window.showInformationMessage("LFS cache is already empty");
+				return;
+			}
+
+			const action = await vscode.window.showWarningMessage(
+				`Clear LFS cache? This will remove ${stats.fileCount} cached file(s) (${stats.totalSizeMB.toFixed(2)} MB)`,
+				"Clear Cache",
+				"Cancel",
+			);
+
+			if (action === "Clear Cache") {
+				lfsCache.clear();
+				vscode.window.showInformationMessage("LFS cache cleared successfully");
+			}
+		} catch (error) {
+			logger.error("Failed to clear LFS cache", error);
+			vscode.window.showErrorMessage(
+				`Failed to clear LFS cache: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	};
+
+	const checkoutBranch = async (
+		arg: string | { pullRequest: PullRequest } | PullRequest | undefined,
+	) => {
+		const pr = extractPullRequest(arg);
+		if (!pr) {
+			vscode.window.showErrorMessage("Unable to checkout: invalid PR");
+			return;
+		}
+
+		await checkoutHandler.execute(pr);
+	};
+
 	const subscriptions = [
 		vscode.commands.registerCommand("azureDevOpsPRs.refreshComments", async () => {
 			logger.info("Manual comment refresh requested");
 			await commentController.refresh();
 		}),
 		commentController,
-		vscode.commands.registerCommand("azureDevOpsPRs.refresh", () => {
-			azureDevOpsClient.clearCache();
-			pullRequestProvider.refresh();
+		vscode.commands.registerCommand("azureDevOpsPRs.refresh", refreshPullRequests),
+		vscode.commands.registerCommand("azureDevOpsPRs.signIn", signIn),
+		vscode.commands.registerCommand("azureDevOpsPRs.signOut", signOut),
+		vscode.commands.registerCommand("azureDevOpsPRs.signin", signIn),
+		vscode.commands.registerCommand("azureDevOpsPRs.singin", signIn),
+		vscode.commands.registerCommand("azuredevopsprs.refresh", refreshPullRequests),
+		vscode.commands.registerCommand("azuredevopsprs.signin", signIn),
+		vscode.commands.registerCommand("azuredevopsprs.singin", signIn),
+		vscode.commands.registerCommand("azuredevopsprs.signout", signOut),
+		vscode.commands.registerCommand("azureDevOpsPRs.openPR", openPullRequest),
+		vscode.commands.registerCommand("azureDevOpsPRs.viewPR", viewPullRequest),
+		vscode.commands.registerCommand("azureDevOpsPRs.clearLfsCache", clearLfsCache),
+		vscode.commands.registerCommand("azureDevOpsPRs.checkoutBranch", checkoutBranch),
+		vscode.commands.registerCommand("azuredevopsprs.openpr", openPullRequest),
+		vscode.commands.registerCommand("azuredevopsprs.viewpr", viewPullRequest),
+		vscode.commands.registerCommand("azuredevopsprs.refreshcomments", async () => {
+			logger.info("Manual comment refresh requested");
+			await commentController.refresh();
 		}),
-		vscode.commands.registerCommand("azureDevOpsPRs.signIn", async () => {
-			try {
-				await authProvider.signIn();
-				await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", true);
-				vscode.window.showInformationMessage("Successfully signed in to Azure DevOps PR Viewer");
-				pullRequestProvider.refresh();
-			} catch (error) {
-				vscode.window.showErrorMessage(`Sign in failed: ${error}`);
-			}
-		}),
-		vscode.commands.registerCommand("azureDevOpsPRs.signOut", async () => {
-			await authProvider.signOut();
-			await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", false);
-			vscode.window.showInformationMessage("Signed out from Azure DevOps PR Viewer");
-			pullRequestProvider.refresh();
-		}),
-		vscode.commands.registerCommand(
-			"azureDevOpsPRs.openPR",
-			async (arg: string | { pullRequest: PullRequest } | PullRequest | undefined) => {
-				if (typeof arg === "string") {
-					await vscode.env.openExternal(vscode.Uri.parse(arg));
-					return;
-				}
-
-				const pr = extractPullRequest(arg);
-				if (!pr) {
-					vscode.window.showErrorMessage("Unable to open PR: invalid argument");
-					return;
-				}
-
-				const org = vscode.workspace
-					.getConfiguration("azureDevOpsPRViewer")
-					.get<string>("organization", "");
-				const url = buildPRUrl(pr, org);
-				await vscode.env.openExternal(vscode.Uri.parse(url));
-			},
-		),
-		vscode.commands.registerCommand(
-			"azureDevOpsPRs.viewPR",
-			async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
-				const pr = extractPullRequest(arg);
-				if (!pr) {
-					vscode.window.showErrorMessage("Unable to view PR: invalid argument");
-					return;
-				}
-
-				await PullRequestViewerPanel.createOrShow(
-					context.extensionUri,
-					azureDevOpsClient,
-					pr,
-					reviewedFilesService,
-				);
-			},
-		),
-		vscode.commands.registerCommand("azureDevOpsPRs.clearLfsCache", async () => {
-			try {
-				const lfsCache = new LfsCache(context);
-				const stats = lfsCache.getStats();
-
-				if (stats.fileCount === 0) {
-					vscode.window.showInformationMessage("LFS cache is already empty");
-					return;
-				}
-
-				const action = await vscode.window.showWarningMessage(
-					`Clear LFS cache? This will remove ${stats.fileCount} cached file(s) (${stats.totalSizeMB.toFixed(2)} MB)`,
-					"Clear Cache",
-					"Cancel",
-				);
-
-				if (action === "Clear Cache") {
-					lfsCache.clear();
-					vscode.window.showInformationMessage("LFS cache cleared successfully");
-				}
-			} catch (error) {
-				logger.error("Failed to clear LFS cache", error);
-				vscode.window.showErrorMessage(
-					`Failed to clear LFS cache: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}),
-		vscode.commands.registerCommand(
-			"azureDevOpsPRs.checkoutBranch",
-			async (arg: string | { pullRequest: PullRequest } | PullRequest | undefined) => {
-				const pr = extractPullRequest(arg);
-				if (!pr) {
-					vscode.window.showErrorMessage("Unable to checkout: invalid PR");
-					return;
-				}
-
-				await checkoutHandler.execute(pr);
-			},
-		),
+		vscode.commands.registerCommand("azuredevopsprs.clearlfscache", clearLfsCache),
+		vscode.commands.registerCommand("azuredevopsprs.checkoutbranch", checkoutBranch),
 		vscode.workspace.onDidChangeConfiguration((e) => {
 			if (e.affectsConfiguration("azureDevOpsPRViewer.autoRefreshInterval")) {
 				setupAutoRefresh();
