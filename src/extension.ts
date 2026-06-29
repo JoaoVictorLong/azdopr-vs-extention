@@ -357,7 +357,7 @@ td { padding: 4px 8px; }
 
 <div class="section">
 <h2>Branches</h2>
-<div class="branches">${pr.sourceRefName.replace("refs/heads/", "")} → ${pr.targetRefName.replace("refs/heads/", "")}</div>
+<div class="branches">${(pr.sourceRefName||"").replace("refs/heads/", "")} → ${(pr.targetRefName||"").replace("refs/heads/", "")}</div>
 </div>
 
 ${pr.description ? `<div class="section"><h2>Description</h2><div class="desc">${this.escapeHtml(pr.description)}</div></div>` : ""}
@@ -407,7 +407,8 @@ function sendInline(path) {
 </html>`;
 	}
 
-	private escapeHtml(text: string): string {
+	private escapeHtml(text: string | null | undefined): string {
+		if (!text) return "";
 		return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 	}
 }
