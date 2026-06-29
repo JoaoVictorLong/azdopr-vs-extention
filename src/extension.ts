@@ -1,16 +1,8 @@
 import * as vscode from "vscode";
 import { AzureDevOpsAuthProvider } from "./auth/authProvider";
-import { CheckoutBranchCommandHandler } from "./commands/checkoutBranchCommand";
-import { PRCommentController } from "./providers/prCommentController";
 import { PullRequestProvider } from "./providers/pullRequestProvider";
 import { AzureDevOpsClient, type PullRequest } from "./services/azureDevOpsClient";
-import { CommentEventCoordinator } from "./services/commentEventCoordinator";
-import { GitService } from "./services/gitService";
-import { LfsCache } from "./services/lfs/lfsCache";
-import { RepositoryMatchingService } from "./services/repositoryMatchingService";
-import { ReviewedFilesService } from "./services/reviewedFilesService";
 import { Logger } from "./utils/logger";
-import { PullRequestViewerPanel } from "./views/pullRequestViewerPanel";
 
 const logger = Logger.getInstance();
 
@@ -18,25 +10,13 @@ let pullRequestProvider: PullRequestProvider;
 let authProvider: AzureDevOpsAuthProvider;
 let refreshInterval: NodeJS.Timeout | undefined;
 let azureDevOpsClient: AzureDevOpsClient;
-let commentController: PRCommentController;
-let commentEventCoordinator: CommentEventCoordinator;
-let reviewedFilesService: ReviewedFilesService;
 
 function extractPullRequest(
 	arg: string | { pullRequest: PullRequest } | PullRequest | undefined,
 ): PullRequest | undefined {
-	if (!arg || typeof arg === "string") {
-		return undefined;
-	}
-
-	if ("pullRequest" in arg) {
-		return arg.pullRequest;
-	}
-
-	if ("repository" in arg) {
-		return arg as PullRequest;
-	}
-
+	if (!arg || typeof arg === "string") return undefined;
+	if ("pullRequest" in arg) return arg.pullRequest;
+	if ("repository" in arg) return arg as PullRequest;
 	return undefined;
 }
 
@@ -45,16 +25,12 @@ function buildPRUrl(pr: PullRequest, organization: string): string {
 }
 
 export async function activate(context: vscode.ExtensionContext) {
-	logger.info("Azure DevOps PR Viewer extension is now active");
+	logger.info("Azure DevOps PR Viewer (Simple) is now active");
 
 	authProvider = new AzureDevOpsAuthProvider();
 
 	const isAuthenticated = await authProvider.isAuthenticated();
-	await vscode.commands.executeCommand(
-		"setContext",
-		"azureDevOpsPRs:authenticated",
-		isAuthenticated,
-	);
+	await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", isAuthenticated);
 
 	if (authProvider.isPatAuth()) {
 		logger.info("PAT authentication configured");
@@ -63,26 +39,6 @@ export async function activate(context: vscode.ExtensionContext) {
 	azureDevOpsClient = new AzureDevOpsClient(authProvider);
 	pullRequestProvider = new PullRequestProvider(azureDevOpsClient, authProvider);
 	vscode.window.registerTreeDataProvider("azureDevOpsPRs", pullRequestProvider);
-
-	commentController = new PRCommentController(azureDevOpsClient);
-	commentController.initialize(); // Non-blocking async init
-
-	commentEventCoordinator = new CommentEventCoordinator(commentController);
-	reviewedFilesService = ReviewedFilesService.getInstance(context);
-
-	const gitService = new GitService();
-	const gitAvailable = await gitService.initialize();
-
-	if (!gitAvailable) {
-		logger.warn("Git extension not available - checkout features disabled");
-	}
-
-	const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
-	const organization = config.get<string>("organization", "");
-
-	const repositoryMatchingService = new RepositoryMatchingService(gitService, organization);
-
-	const checkoutHandler = new CheckoutBranchCommandHandler(gitService, repositoryMatchingService);
 
 	const refreshPullRequests = () => {
 		azureDevOpsClient.clearCache();
@@ -107,20 +63,18 @@ export async function activate(context: vscode.ExtensionContext) {
 		pullRequestProvider.refresh();
 	};
 
-	const openPullRequest = async (
+	const openInBrowser = async (
 		arg: string | { pullRequest: PullRequest } | PullRequest | undefined,
 	) => {
 		if (typeof arg === "string") {
 			await vscode.env.openExternal(vscode.Uri.parse(arg));
 			return;
 		}
-
 		const pr = extractPullRequest(arg);
 		if (!pr) {
 			vscode.window.showErrorMessage("Unable to open PR: invalid argument");
 			return;
 		}
-
 		const org = vscode.workspace
 			.getConfiguration("azureDevOpsPRViewer")
 			.get<string>("organization", "");
@@ -128,88 +82,21 @@ export async function activate(context: vscode.ExtensionContext) {
 		await vscode.env.openExternal(vscode.Uri.parse(url));
 	};
 
-	const viewPullRequest = async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
+	const viewPRDetails = async (arg: { pullRequest: PullRequest } | PullRequest | undefined) => {
 		const pr = extractPullRequest(arg);
 		if (!pr) {
 			vscode.window.showErrorMessage("Unable to view PR: invalid argument");
 			return;
 		}
-
-		await PullRequestViewerPanel.createOrShow(
-			context.extensionUri,
-			azureDevOpsClient,
-			pr,
-			reviewedFilesService,
-		);
+		PRDetailPanel.createOrShow(context.extensionUri, pr, authProvider);
 	};
 
-	const clearLfsCache = async () => {
-		try {
-			const lfsCache = new LfsCache(context);
-			const stats = lfsCache.getStats();
-
-			if (stats.fileCount === 0) {
-				vscode.window.showInformationMessage("LFS cache is already empty");
-				return;
-			}
-
-			const action = await vscode.window.showWarningMessage(
-				`Clear LFS cache? This will remove ${stats.fileCount} cached file(s) (${stats.totalSizeMB.toFixed(2)} MB)`,
-				"Clear Cache",
-				"Cancel",
-			);
-
-			if (action === "Clear Cache") {
-				lfsCache.clear();
-				vscode.window.showInformationMessage("LFS cache cleared successfully");
-			}
-		} catch (error) {
-			logger.error("Failed to clear LFS cache", error);
-			vscode.window.showErrorMessage(
-				`Failed to clear LFS cache: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	};
-
-	const checkoutBranch = async (
-		arg: string | { pullRequest: PullRequest } | PullRequest | undefined,
-	) => {
-		const pr = extractPullRequest(arg);
-		if (!pr) {
-			vscode.window.showErrorMessage("Unable to checkout: invalid PR");
-			return;
-		}
-
-		await checkoutHandler.execute(pr);
-	};
-
-	const subscriptions = [
-		vscode.commands.registerCommand("azureDevOpsPRs.refreshComments", async () => {
-			logger.info("Manual comment refresh requested");
-			await commentController.refresh();
-		}),
-		commentController,
+	context.subscriptions.push(
 		vscode.commands.registerCommand("azureDevOpsPRs.refresh", refreshPullRequests),
 		vscode.commands.registerCommand("azureDevOpsPRs.signIn", signIn),
 		vscode.commands.registerCommand("azureDevOpsPRs.signOut", signOut),
-		vscode.commands.registerCommand("azureDevOpsPRs.signin", signIn),
-		vscode.commands.registerCommand("azureDevOpsPRs.singin", signIn),
-		vscode.commands.registerCommand("azuredevopsprs.refresh", refreshPullRequests),
-		vscode.commands.registerCommand("azuredevopsprs.signin", signIn),
-		vscode.commands.registerCommand("azuredevopsprs.singin", signIn),
-		vscode.commands.registerCommand("azuredevopsprs.signout", signOut),
-		vscode.commands.registerCommand("azureDevOpsPRs.openPR", openPullRequest),
-		vscode.commands.registerCommand("azureDevOpsPRs.viewPR", viewPullRequest),
-		vscode.commands.registerCommand("azureDevOpsPRs.clearLfsCache", clearLfsCache),
-		vscode.commands.registerCommand("azureDevOpsPRs.checkoutBranch", checkoutBranch),
-		vscode.commands.registerCommand("azuredevopsprs.openpr", openPullRequest),
-		vscode.commands.registerCommand("azuredevopsprs.viewpr", viewPullRequest),
-		vscode.commands.registerCommand("azuredevopsprs.refreshcomments", async () => {
-			logger.info("Manual comment refresh requested");
-			await commentController.refresh();
-		}),
-		vscode.commands.registerCommand("azuredevopsprs.clearlfscache", clearLfsCache),
-		vscode.commands.registerCommand("azuredevopsprs.checkoutbranch", checkoutBranch),
+		vscode.commands.registerCommand("azureDevOpsPRs.openPR", openInBrowser),
+		vscode.commands.registerCommand("azureDevOpsPRs.viewPR", viewPRDetails),
 		vscode.workspace.onDidChangeConfiguration((e) => {
 			if (e.affectsConfiguration("azureDevOpsPRViewer.autoRefreshInterval")) {
 				setupAutoRefresh();
@@ -218,32 +105,12 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.authentication.onDidChangeSessions(async (e) => {
 			if (e.provider.id === "microsoft" && !authProvider.isPatAuth()) {
 				const isAuthenticated = await authProvider.isAuthenticated();
-				await vscode.commands.executeCommand(
-					"setContext",
-					"azureDevOpsPRs:authenticated",
-					isAuthenticated,
-				);
+				await vscode.commands.executeCommand("setContext", "azureDevOpsPRs:authenticated", isAuthenticated);
 				pullRequestProvider.refresh();
 			}
 		}),
+	);
 
-		// Comment event listeners - required for inline PR comments in diff views
-		vscode.workspace.onDidOpenTextDocument(
-			commentEventCoordinator.handleDocumentEvent.bind(commentEventCoordinator),
-		),
-
-		vscode.window.onDidChangeActiveTextEditor(
-			commentEventCoordinator.handleEditorChange.bind(commentEventCoordinator),
-		),
-
-		vscode.workspace.onDidCloseTextDocument(
-			commentEventCoordinator.handleDocumentClose.bind(commentEventCoordinator),
-		),
-
-		commentEventCoordinator,
-	];
-
-	context.subscriptions.push(...subscriptions);
 	setupAutoRefresh();
 	pullRequestProvider.initialize();
 }
@@ -253,19 +120,100 @@ function setupAutoRefresh() {
 		clearInterval(refreshInterval);
 		refreshInterval = undefined;
 	}
-
 	const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
 	const interval = config.get<number>("autoRefreshInterval", 0);
-
 	if (interval > 0) {
-		refreshInterval = setInterval(() => {
-			pullRequestProvider.refresh();
-		}, interval * 1000);
+		refreshInterval = setInterval(() => pullRequestProvider.refresh(), interval * 1000);
 	}
 }
 
 export function deactivate() {
-	if (refreshInterval) {
-		clearInterval(refreshInterval);
+	if (refreshInterval) clearInterval(refreshInterval);
+}
+
+class PRDetailPanel {
+	static current: PRDetailPanel | undefined;
+	private panel: vscode.WebviewPanel;
+
+	private constructor(panel: vscode.WebviewPanel) {
+		this.panel = panel;
+	}
+
+	static createOrShow(extensionUri: vscode.Uri, pr: PullRequest, auth: AzureDevOpsAuthProvider) {
+		if (PRDetailPanel.current) {
+			PRDetailPanel.current.panel.reveal(vscode.ViewColumn.Beside);
+			PRDetailPanel.current.render(pr, auth.isPatAuth());
+			return;
+		}
+
+		const panel = vscode.window.createWebviewPanel(
+			"azdoPrDetail",
+			`PR #${pr.pullRequestId}`,
+			vscode.ViewColumn.Beside,
+			{ enableScripts: false },
+		);
+
+		PRDetailPanel.current = new PRDetailPanel(panel);
+		PRDetailPanel.current.render(pr, auth.isPatAuth());
+
+		panel.onDidDispose(() => {
+			PRDetailPanel.current = undefined;
+		});
+	}
+
+	private render(pr: PullRequest, isPat: boolean) {
+		const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+		const reviewerRows = (pr.reviewers || [])
+			.map((r) => {
+				const voteIcon = r.vote === 10 ? "✅" : r.vote === 5 ? "👍" : r.vote === -5 ? "⏳" : r.vote === -10 ? "❌" : "⬜";
+				const required = r.isRequired ? " (required)" : "";
+				return `<tr><td>${voteIcon}</td><td>${r.displayName}${required}</td></tr>`;
+			})
+			.join("");
+
+		const draftBadge = pr.isDraft ? '<span style="background:#666;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">Draft</span>' : "";
+
+		this.panel.webview.html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 16px; color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); }
+h1 { font-size: 18px; margin: 0 0 4px; }
+.meta { color: var(--vscode-descriptionForeground); font-size: 13px; margin-bottom: 16px; }
+.section { margin-bottom: 16px; }
+.section h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+.desc { white-space: pre-wrap; font-size: 13px; line-height: 1.5; background: var(--vscode-textBlockQuote-background); padding: 12px; border-radius: 4px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+td { padding: 4px 8px; }
+.label { color: var(--vscode-descriptionForeground); width: 100px; }
+.branches { font-family: monospace; font-size: 13px; }
+.pat-notice { font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 16px; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>${pr.title} ${draftBadge}</h1>
+<div class="meta">#${pr.pullRequestId} opened ${fmtDate(pr.creationDate)} by ${pr.createdBy.displayName}</div>
+
+<div class="section">
+<h2>Branches</h2>
+<div class="branches">${pr.sourceRefName.replace("refs/heads/", "")} → ${pr.targetRefName.replace("refs/heads/", "")}</div>
+</div>
+
+${pr.description ? `<div class="section"><h2>Description</h2><div class="desc">${this.escapeHtml(pr.description)}</div></div>` : ""}
+
+<div class="section">
+<h2>Reviewers (${pr.reviewers?.length || 0})</h2>
+<table>${reviewerRows}</table>
+</div>
+
+${isPat ? '<div class="pat-notice">Using PAT authentication — comments and avatars are not available</div>' : ""}
+</body>
+</html>`;
+	}
+
+	private escapeHtml(text: string): string {
+		return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 	}
 }

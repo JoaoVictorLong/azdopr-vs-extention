@@ -1,15 +1,12 @@
 {
-  "name": "azdopr-fork",
-  "displayName": "Azure DevOps PR Viewer (Fork)",
-  "description": "View all Pull Requests across your entire Azure DevOps organization in one place — fork with PAT authentication support",
-  "version": "1.8.1",
+  "name": "azdopr-simple",
+  "displayName": "Azure DevOps PR Viewer (Simple)",
+  "description": "View all Pull Requests across your Azure DevOps organization — simple and focused",
+  "version": "0.1.0",
   "author": "JoaoVictorLong",
   "publisher": "joaovictorlong",
   "license": "MIT",
   "repository": "https://github.com/JoaoVictorLong/azdopr-vs-extention",
-  "bugs": "https://github.com/JoaoVictorLong/azdopr-vs-extention/issues",
-  "homepage": "https://github.com/JoaoVictorLong/azdopr-vs-extention#readme",
-  "icon": "resources/azdopr-icon.png",
   "engines": {
     "vscode": "^1.105.0"
   },
@@ -23,21 +20,7 @@
     "onCommand:azureDevOpsPRs.signIn",
     "onCommand:azureDevOpsPRs.signOut",
     "onCommand:azureDevOpsPRs.openPR",
-    "onCommand:azureDevOpsPRs.viewPR",
-    "onCommand:azureDevOpsPRs.refreshComments",
-    "onCommand:azureDevOpsPRs.clearLfsCache",
-    "onCommand:azureDevOpsPRs.checkoutBranch",
-    "onCommand:azureDevOpsPRs.signin",
-    "onCommand:azureDevOpsPRs.singin",
-    "onCommand:azuredevopsprs.signin",
-    "onCommand:azuredevopsprs.singin",
-    "onCommand:azuredevopsprs.refresh",
-    "onCommand:azuredevopsprs.signout",
-    "onCommand:azuredevopsprs.openpr",
-    "onCommand:azuredevopsprs.viewpr",
-    "onCommand:azuredevopsprs.refreshcomments",
-    "onCommand:azuredevopsprs.clearlfscache",
-    "onCommand:azuredevopsprs.checkoutbranch"
+    "onCommand:azureDevOpsPRs.viewPR"
   ],
   "contributes": {
     "commands": [
@@ -66,82 +49,8 @@
       },
       {
         "command": "azureDevOpsPRs.viewPR",
-        "title": "View Pull Request",
+        "title": "View Pull Request Details",
         "category": "Azure DevOps PR Viewer"
-      },
-      {
-        "command": "azureDevOpsPRs.refreshComments",
-        "title": "Refresh Comments",
-        "category": "Azure DevOps PR Viewer",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "azdo-pr-comments.createOrReplyComment",
-        "title": "Add Comment"
-      },
-      {
-        "command": "azdo-pr-comments.editComment",
-        "title": "Edit Comment",
-        "icon": "$(edit)"
-      },
-      {
-        "command": "azdo-pr-comments.saveEditedComment",
-        "title": "Save",
-        "icon": "$(save)"
-      },
-      {
-        "command": "azdo-pr-comments.cancelEditComment",
-        "title": "Cancel",
-        "icon": "$(close)"
-      },
-      {
-        "command": "azdo-pr-comments.deleteComment",
-        "title": "Delete Comment",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "azdo-pr-comments.resolveThread",
-        "title": "Resolve Thread",
-        "icon": "$(check)"
-      },
-      {
-        "command": "azdo-pr-comments.unresolveThread",
-        "title": "Unresolve Thread",
-        "icon": "$(circle-slash)"
-      },
-      {
-        "command": "azureDevOpsPRs.clearLfsCache",
-        "title": "Clear LFS File Cache",
-        "category": "Azure DevOps PR Viewer"
-      },
-      {
-        "command": "azureDevOpsPRs.checkoutBranch",
-        "title": "Checkout Branch Locally",
-        "category": "Azure DevOps PR Viewer",
-        "icon": "$(git-branch)"
-      },
-      {
-        "command": "azdo-pr-comments.applySuggestion",
-        "title": "Apply Suggestion",
-        "icon": "$(check)"
-      },
-      {
-        "command": "azdo-pr-comments.collapseAllThreads",
-        "title": "Collapse All Comment Threads",
-        "category": "Azure DevOps PR Viewer",
-        "icon": "$(fold)"
-      },
-      {
-        "command": "azdo-pr-comments.expandAllThreads",
-        "title": "Expand All Comment Threads",
-        "category": "Azure DevOps PR Viewer",
-        "icon": "$(unfold)"
-      },
-      {
-        "command": "azdo-pr-comments.addFileComment",
-        "title": "Add File Comment",
-        "category": "Azure DevOps PR Viewer",
-        "icon": "$(comment-discussion)"
       }
     ],
     "viewsContainers": {
@@ -172,63 +81,21 @@
       ],
       "view/item/context": [
         {
-          "command": "azureDevOpsPRs.checkoutBranch",
+          "command": "azureDevOpsPRs.openPR",
           "when": "view == azureDevOpsPRs && viewItem == pullrequest",
-          "group": "navigation"
-        }
-      ],
-      "comments/commentThread/context": [
-        {
-          "command": "azdo-pr-comments.createOrReplyComment",
-          "when": "commentController == azdo-pr-comments",
-          "group": "inline@1"
-        }
-      ],
-      "comments/commentThread/title": [
-        {
-          "command": "azdo-pr-comments.resolveThread",
-          "when": "commentController == azdo-pr-comments && commentThreadState == unresolved",
-          "group": "inline"
-        },
-        {
-          "command": "azdo-pr-comments.unresolveThread",
-          "when": "commentController == azdo-pr-comments && commentThreadState == resolved",
-          "group": "inline"
-        }
-      ],
-      "comments/comment/title": [
-        {
-          "command": "azdo-pr-comments.editComment",
-          "when": "commentController == azdo-pr-comments && comment =~ /canEdit/ && !(comment =~ /editing/)",
           "group": "inline@1"
         },
         {
-          "command": "azdo-pr-comments.saveEditedComment",
-          "when": "commentController == azdo-pr-comments && comment =~ /editing/",
-          "group": "inline@1"
-        },
-        {
-          "command": "azdo-pr-comments.cancelEditComment",
-          "when": "commentController == azdo-pr-comments && comment =~ /editing/",
+          "command": "azureDevOpsPRs.viewPR",
+          "when": "view == azureDevOpsPRs && viewItem == pullrequest",
           "group": "inline@2"
-        },
-        {
-          "command": "azdo-pr-comments.deleteComment",
-          "when": "commentController == azdo-pr-comments && comment =~ /canDelete/ && !(comment =~ /editing/)",
-          "group": "inline@3"
-        },
-        {
-          "command": "azdo-pr-comments.applySuggestion",
-          "when": "commentController == azdo-pr-comments && comment =~ /hasSuggestion/ && !(comment =~ /editing/)",
-          "group": "inline@4"
         }
-      ],
-      "comments/comment/context": []
+      ]
     },
     "viewsWelcome": [
       {
         "view": "azureDevOpsPRs",
-        "contents": "Welcome to Azure DevOps PR Viewer!\n\nTo get started, set the **azureDevOpsPRViewer.organization** and **azureDevOpsPRViewer.patToken** settings, or sign in with your Microsoft account.\n\n[Sign In to Azure DevOps PR Viewer](command:azureDevOpsPRs.signIn)\n\nOnce authenticated, you'll see all pull requests from your organization.",
+        "contents": "Welcome to Azure DevOps PR Viewer!\n\nTo get started, set the **azureDevOpsPRViewer.organization** and **azureDevOpsPRViewer.patToken** settings.\n\n[Sign In](command:azureDevOpsPRs.signIn)\n\nOnce authenticated, you'll see all pull requests from your organization.",
         "when": "!azureDevOpsPRs:authenticated"
       }
     ],
@@ -240,113 +107,39 @@
           "default": "",
           "description": "Azure DevOps organization name (e.g., 'myorg' from dev.azure.com/myorg)"
         },
+        "azureDevOpsPRViewer.patToken": {
+          "type": "string",
+          "default": "",
+          "description": "Personal Access Token (PAT) for Azure DevOps authentication"
+        },
+        "azureDevOpsPRViewer.maxPRsToFetch": {
+          "type": "number",
+          "default": 200,
+          "description": "Maximum number of PRs to fetch"
+        },
         "azureDevOpsPRViewer.autoRefreshInterval": {
           "type": "number",
           "default": 300,
           "description": "Auto-refresh interval in seconds (0 to disable)"
-        },
-        "azureDevOpsPRViewer.maxPRsToFetch": {
-          "type": "number",
-          "default": 500,
-          "description": "Maximum number of PRs to fetch per project"
-        },
-        "azureDevOpsPRViewer.includedProjects": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "If specified, only fetch PRs from these projects (empty = all projects)"
-        },
-        "azureDevOpsPRViewer.commentsAutoRefreshInterval": {
-          "type": "number",
-          "default": 30,
-          "description": "Auto-refresh interval for comments in seconds (0 to disable)"
-        },
-        "azureDevOpsPRViewer.lfs.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable Git LFS file support for viewing binary files in PRs"
-        },
-        "azureDevOpsPRViewer.lfs.cacheSize": {
-          "type": "number",
-          "default": 500,
-          "description": "Maximum cache size for LFS files in MB"
-        },
-        "azureDevOpsPRViewer.lfs.supportedTypes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [
-            "pdf"
-          ],
-          "description": "File types to handle as LFS files (e.g., pdf, xlsx, png)"
-        },
-        "azureDevOpsPRViewer.prFilter": {
-          "type": "string",
-          "default": "all",
-          "enum": [
-            "all",
-            "createdByMe",
-            "needsMyReview",
-            "assignedToMe"
-          ],
-          "enumDescriptions": [
-            "Show all active pull requests",
-            "Only pull requests I created",
-            "Only pull requests needing my review (I haven't voted yet)",
-            "Only pull requests where I am a reviewer"
-          ],
-          "description": "Filter which pull requests to display"
-        },
-        "azureDevOpsPRViewer.patToken": {
-          "type": "string",
-          "default": "",
-          "description": "Personal Access Token (PAT) for Azure DevOps. If set, the extension will use PAT authentication instead of Microsoft account sign-in."
-        },
-        "azureDevOpsPRViewer.comments.autoCollapseResolved": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically collapse resolved comment threads"
         }
       }
     }
   },
   "scripts": {
-    "compile": "npm run compile:extension && npm run compile:tests",
-    "compile:extension": "vite build",
-    "compile:tests": "tsc --project tsconfig.test.json",
+    "compile": "vite build",
     "watch": "vite build --watch",
     "package": "vite build --mode production",
-    "vscode:prepublish": "npm run compile:extension",
-    "pretest": "npm run compile && npm run lint",
-    "lint": "biome check src",
-    "test": "vscode-test",
-    "prepare": "husky install",
-    "publish": "vsce publish",
+    "vscode:prepublish": "vite build",
     "package:vsix": "vsce package"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.3.5",
-    "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.105.0",
-    "@vscode/test-cli": "^0.0.11",
-    "@vscode/test-electron": "^2.5.2",
-    "c8": "^10.1.3",
-    "husky": "^9.1.7",
-    "lint-staged": "^15.5.2",
-    "patch-package": "^8.0.1",
-    "sinon": "^19.0.5",
     "typescript": "^5.9.3",
     "vite": "^7.2.2",
-    "vite-plugin-static-copy": "^3.1.4"
+    "vite-plugin-static-copy": "^4.1.1"
   },
   "dependencies": {
-    "@azure/msal-node": "^3.8.1",
-    "axios": "^1.13.2",
-    "marked": "^17.0.0"
+    "axios": "^1.13.2"
   }
 }
