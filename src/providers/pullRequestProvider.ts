@@ -95,6 +95,11 @@ export class PullRequestProvider implements vscode.TreeDataProvider<PRTreeItem> 
 						return this.needsCurrentUserReview(pr);
 					case "assignedToMe":
 						return pr.reviewers?.some((r) => r.uniqueName === this.currentUserId) ?? false;
+					case "createdOrAssigned":
+						return (
+							pr.createdBy.uniqueName === this.currentUserId ||
+							(pr.reviewers?.some((r) => r.uniqueName === this.currentUserId) ?? false)
+						);
 					default:
 						return true;
 				}

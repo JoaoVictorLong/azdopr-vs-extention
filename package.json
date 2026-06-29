@@ -117,6 +117,25 @@
           "default": 200,
           "description": "Maximum number of PRs to fetch"
         },
+        "azureDevOpsPRViewer.prFilter": {
+          "type": "string",
+          "default": "all",
+          "enum": [
+            "all",
+            "createdByMe",
+            "assignedToMe",
+            "createdOrAssigned",
+            "needsMyReview"
+          ],
+          "enumDescriptions": [
+            "Show all pull requests",
+            "Only PRs created by me",
+            "Only PRs where I'm a reviewer",
+            "PRs created by me or where I'm a reviewer",
+            "Only PRs needing my review (vote = 0)"
+          ],
+          "description": "Filter which pull requests are shown"
+        },
         "azureDevOpsPRViewer.autoRefreshInterval": {
           "type": "number",
           "default": 300,
