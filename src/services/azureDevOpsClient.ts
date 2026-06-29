@@ -425,68 +425,27 @@ export class AzureDevOpsClient {
 	}
 
 	async getAllPullRequests(): Promise<PullRequest[]> {
-		return this.cachedFetch(
-			"all-prs",
-			async () => {
-				this.updateOrganization();
-				let projects = await this.getProjects();
+		const headers = await this.getAuthHeaders();
+		const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
+		const maxPRs = config.get<number>("maxPRsToFetch", 500);
+		const includedProjects = config.get<string[]>("includedProjects", []);
 
-				// Filter projects if configuration specifies included projects
-				const config = vscode.workspace.getConfiguration("azureDevOpsPRViewer");
-				const includedProjects = config.get<string[]>("includedProjects", []);
+		this.updateOrganization();
 
-				if (includedProjects.length > 0) {
-					projects = projects.filter((p) => includedProjects.includes(p.name));
-					logger.info(
-						`Filtered to ${projects.length} projects: ${projects.map((p) => p.name).join(", ")}`,
-					);
-				}
+		// Use the organization-level PR search API — single call instead of
+		// iterating every project/repository (which causes ECONNRESET issues)
+		const url = `${this.getBaseUrl()}/_apis/git/pullRequests?searchCriteria.status=active&$top=${maxPRs}&api-version=7.0`;
 
-				// Fetch all repos for all projects in parallel (resilient to individual failures)
-				const projectRepoResults = await Promise.allSettled(
-					projects.map(async (project) => {
-						const repos = await this.getRepositories(project.id);
-						return { project, repos };
-					}),
-				);
-
-				const projectRepos: Array<{ project: Project; repos: Repository[] }> = [];
-				for (const result of projectRepoResults) {
-					if (result.status === "fulfilled") {
-						projectRepos.push(result.value);
-					} else {
-						logger.warn(`Failed to fetch repositories for a project: ${result.reason}`);
-					}
-				}
-
-				// Fetch all PRs for all repos in parallel (resilient to individual failures)
-				const allPRResults = await Promise.allSettled(
-					projectRepos.flatMap(({ project, repos }) =>
-						repos.map(async (repo) => {
-							try {
-								return await this.getPullRequests(project.id, repo.id);
-							} catch (error) {
-								logger.warn(
-									`Failed to fetch PRs for ${project.name}/${repo.name}: ${error instanceof Error ? error.message : String(error)}`,
-								);
-								return [];
-							}
-						}),
-					),
-				);
-
-				const allPRs: PullRequest[] = [];
-				for (const result of allPRResults) {
-					if (result.status === "fulfilled") {
-						allPRs.push(...result.value);
-					}
-					// Rejections already logged in the inner catch
-				}
-
-				return allPRs;
-			},
-			30000, // 30 second cache
+		const response = await this.axiosInstance.get(url, { headers });
+		let prs: PullRequest[] = (response.data.value || []).map(
+			(pr: AzDOPullRequest) => this.mapPullRequest(pr),
 		);
+
+		if (includedProjects.length > 0) {
+			prs = prs.filter((pr) => includedProjects.includes(pr.repository.project.name));
+		}
+
+		return prs;
 	}
 
 	async getPullRequestDetails(
