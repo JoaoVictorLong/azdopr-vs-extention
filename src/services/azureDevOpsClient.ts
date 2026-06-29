@@ -985,6 +985,15 @@ export class AzureDevOpsClient {
 			return undefined;
 		}
 
+		// Internal Azure DevOps avatar endpoints (_api/_common/identityImage,
+		// _apis/GraphProfile/MemberAvatars) do not support PAT Basic auth.
+		// Skip eagerly to avoid noisy 401 errors.
+		const scheme = this.authProvider.getAuthScheme();
+		if (scheme === "Basic" && /\/_api\/_common\/|\/GraphProfile\//.test(imageUrl)) {
+			logger.debug(`AzureDevOpsClient: Skipping avatar (not available with PAT): ${imageUrl}`);
+			return undefined;
+		}
+
 		const cacheKey = `image:${imageUrl}`;
 		const cached = this.cache.get(cacheKey);
 		if (cached && Date.now() - cached.timestamp < cached.ttl) {
