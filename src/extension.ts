@@ -111,7 +111,11 @@ export async function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage("Unable to view PR: invalid argument");
 			return;
 		}
-		PRDetailPanel.createOrShow(context.extensionUri, pr, authProvider);
+		try {
+			await PRDetailPanel.createOrShow(context.extensionUri, pr, authProvider);
+		} catch (error) {
+			vscode.window.showErrorMessage(`Failed to open PR details: ${error}`);
+		}
 	};
 
 	context.subscriptions.push(
@@ -221,6 +225,14 @@ class PRDetailPanel {
 	}
 
 	private async render(pr: PullRequest, isPat: boolean) {
+		try {
+			await this.renderContent(pr, isPat);
+		} catch (error) {
+			this.panel.webview.html = `<!DOCTYPE html><html><body style="padding:16px;font-family:sans-serif;color:var(--vscode-errorForeground)"><h2>Error loading PR details</h2><p>${this.escapeHtml(String(error))}</p></body></html>`;
+		}
+	}
+
+	private async renderContent(pr: PullRequest, isPat: boolean) {
 		const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 		const fmtDateTime = (d: string) => new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
